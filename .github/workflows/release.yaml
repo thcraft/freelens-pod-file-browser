@@ -1,0 +1,102 @@
+name: Release
+
+# Push a tag like v0.3.0 (or v1.0.0-beta.1): checks that it matches package.json, builds and tests the extension,
+# packs it with its checksum and creates the GitHub release with the notes from CHANGELOG.md.
+# Run it by hand (Actions > Release > Run workflow) to build the tarball as an artifact without releasing anything.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Setup pnpm
+        run: corepack enable
+
+      - name: Version
+        id: version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "${GITHUB_REF}" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "${version}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${version} in package.json"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          # 0.x and versions with a suffix (-beta.1) are pre-releases.
+          if [[ "${version}" == 0.* || "${version}" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install pnpm dependencies
+        run: timeout 300 pnpm install --color=always --frozen-lockfile
+
+      - name: Type check
+        run: pnpm --color=always type:check
+
+      - name: Unit tests
+        run: pnpm --color=always test:unit
+
+      - name: Build
+        run: pnpm --color=always build
+
+      # Freelens checks a tarball installed from a URL against the .tgz.sha256 next to it, in sha256sum format.
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p release
+          pnpm pack --pack-destination release
+          cd release
+          tarball="freelens-pod-file-browser-${VERSION}.tgz"
+          test -f "${tarball}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          cat "${tarball}.sha256"
+          tar -tzf "${tarball}"
+
+      # A manual run stops here: the tarball is kept as the "release" artifact of the run.
+      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: release
+          path: release/
+
+      - name: Create release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          # The version's section of CHANGELOG.md; GitHub appends the link to the full list of changes.
+          awk -v v="${VERSION}" 'index($0, "## " v " ") == 1 || $0 == "## " v {found=1; next} /^## / {found=0} found' CHANGELOG.md > notes.md
+          cat notes.md
+          flags=(--title "Pod File Browser ${VERSION}" --generate-notes)
+          [[ -s notes.md ]] && flags+=(--notes-file notes.md)
+          [[ "${PRERELEASE}" == true ]] && flags+=(--prerelease)
+          gh release create "${GITHUB_REF_NAME}" release/* "${flags[@]}"

@@ -16,7 +16,7 @@ jobs:
   knip:
     name: check
 
-    runs-on: ubuntu-26.04-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
@@ -40,9 +40,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.pnpm_cache_dir }}
-          key: ubuntu-26.04-arm-node-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ubuntu-latest-node-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
-            ubuntu-26.04-arm-node-
+            ubuntu-latest-node-
 
       - name: Install pnpm dependencies
         id: install-pnpm

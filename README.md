@@ -1,255 +1,148 @@
-# @freelensapp/example-extension
+# Pod File Browser for Freelens
 
-[![Home](https://img.shields.io/badge/%F0%9F%8F%A0-freelens.app-02a7a0)](https://freelens.app)
-[![GitHub](https://img.shields.io/github/stars/freelensapp/freelens?style=flat&label=GitHub%20%E2%AD%90)](https://github.com/freelensapp/freelens)
-[![DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-blue)](https://deepwiki.com/freelensapp/freelens-example-extension)
-[![Release](https://img.shields.io/github/v/release/freelensapp/freelens-example-extension?display_name=tag&sort=semver)](https://github.com/freelensapp/freelens-example-extension)
-[![npm](https://img.shields.io/npm/v/@freelensapp/example-extension.svg)](https://www.npmjs.com/package/@freelensapp/example-extension)
-[![Integration tests](https://github.com/freelensapp/freelens-example-extension/actions/workflows/integration-tests.yaml/badge.svg?branch=main)](https://github.com/freelensapp/freelens-example-extension/actions/workflows/integration-tests.yaml)
+**The files of a container, one click from the pod.** Pod File Browser is an extension for
+[Freelens](https://freelens.app), the free Kubernetes IDE, that lets you browse the filesystem of any container of a pod,
+download and upload files, edit text files and change their permissions, without typing `kubectl cp` or
+`kubectl exec`.
 
-## Overview
+## Why
 
-This repository is the reference template for building, type-checking,
-testing and releasing an extension for the [Freelens](https://freelens.app)
-application. The
-[Freelens extension documentation](https://github.com/freelensapp/freelens/tree/v2.0.0/docs/extensions)
-describes the extension API and points here for everything around it. Start a
-new extension from a copy of this repository.
+Freelens shows pods, logs and a shell, but getting a file in or out of a container still means a terminal:
+`kubectl cp` needs `tar` in the container and the exact path, and looking around first means an interactive shell.
+Pod File Browser puts the filesystem next to the pod: open it from the pod menu or the pod details, click through the
+folders, and drag files in or save them out.
 
-The extension adds a cluster page, a details panel and a context menu item
-for a custom resource, `Example`, and a setting on the preferences page:
+## Features
 
-- **Two API versions of one CRD.** `Example` is implemented for `v1alpha1`
-  and `v1alpha2`, each with its own model, list page, details and menu item.
-  `v1alpha2` renames `spec.active` to `spec.suspended`, with the meaning
-  inverted.
-- **The served API version picked at runtime.** The "Examples" page shows the
-  newest version the cluster serves, or a message when the CRDs are not
-  installed.
-- **One sidebar entry for the resource.** While the extension is enabled,
-  `Example` is left out of the Custom Resources tree of the cluster sidebar,
-  so it is listed once, under "Examples".
-- **Static helpers on the model.** Per-object logic is a `static` method that
-  takes the object, such as `Example.getSuspended(object)`.
-- **An error boundary.** Each page, details panel and menu item renders an
-  error message instead of breaking the view when it throws.
-- **A persisted preference.** The "Example checkbox" setting is kept across
-  restarts and shown in the details panel.
-
-## Agent skills
-
-Two skills in the [Agent Skills](https://agentskills.io/specification)
-format guide a coding agent, such as Claude Code, Codex, GitHub Copilot,
-Cursor or Gemini CLI, through an extension in its own repository:
-
-- `create-freelens-extension` starts a new Freelens extension from a copy of
-  this repository.
-- `port-freelens-extension-to-v2` ports an extension written for the v1
-  extension API to v2.
-
-Install both into the extension's repository, or one of them with `--skill`:
-
-```sh
-npx skills add freelensapp/freelens-example-extension
-npx skills add freelensapp/freelens-example-extension --skill port-freelens-extension-to-v2
-```
-
-or copy its directory from [`skills/`](skills) to where the agent reads skills
-from.
+- **Where you need it.** A "Pod Files" page in the cluster sidebar (namespace, pod and container pickers, kept in the
+  URL so Back works), a "Browse files" item in the pod menu, and a "Files" section in the pod details. All three are
+  the same browser.
+- **Browse.** Sizes, modification times, permissions, owners and symlink targets; sorting, filter and hidden files.
+  Click a segment of the path to go there, or click the path bar to type a path.
+- **Download** files, and folders as `.tar.gz`; several items at once into a folder.
+- **Upload** through a file dialog or by dropping files on the listing. Existing files are only replaced after you
+  confirm, and an upload that breaks off leaves the file in the container as it was.
+- **Edit text files** (up to 2 MiB) in the Monaco editor of Freelens. Files open as UTF-8; a file in another encoding
+  opens read only until you pick its encoding (Windows-1250, ISO-8859-2, CP852, Windows-1252, ISO-8859-1,
+  ISO-8859-15, Windows-1251, KOI8-R, UTF-16), and is then saved back in it. Binary files are recognised from their
+  first bytes and never opened for editing.
+- **Change permissions:** `chmod` (octal such as `644`, or symbolic such as `u+x`) and `chown` (`user:group`), for the
+  selected items or one row, optionally recursive. Uploaded files are selected, so their permissions can be set right
+  away.
+- **New folder, new file, rename, delete** (with confirmation).
+- **Init and ephemeral containers** are listed too, so a debug container can be browsed.
 
 ## Requirements
 
-- Freelens >= 2.0.0
-- Kubernetes >= 1.24
-
-## Supported APIs
-
-### example.freelens.app
-
-| API Version | Kind      | Scope      | Description                        |
-| ----------- | --------- | ---------- | ---------------------------------- |
-| v1alpha1    | `Example` | Namespaced | Example custom resource (v1alpha1) |
-| v1alpha2    | `Example` | Namespaced | Example custom resource (v1alpha2) |
-
-To install the Custom Resource Definitions for this example, run:
-
-```sh
-kubectl apply -k examples/v1alpha1/crds
-kubectl apply -k examples/v1alpha2/crds
-```
-
-Example resources for testing:
-
-```sh
-kubectl apply -k examples/v1alpha2/test
-# or
-kubectl apply -k examples/v1alpha1/test
-```
+- Freelens 2.0 or newer (extension API v2).
+- A **POSIX shell (`sh`) in the container**. Every operation runs a small script through `kubectl exec … -- sh -c`,
+  written to work with BusyBox as well as a full userland. Images without a shell, such as distroless ones, cannot be
+  browsed; attach an ephemeral debug container with a shell to the pod and browse that one instead.
+- `stat` for sizes, times and permissions (the listing works without it, with names only), `tar` for downloading
+  folders, `mktemp` for safe uploads (without it, data is written into the file directly and checked afterwards).
+- Kubernetes permissions to list pods and to create `pods/exec` in the namespace. Changing the owner usually needs the
+  container to run as root.
 
 ## Install
 
-Open Freelens and go to Extensions (`ctrl`+`shift`+`E` or
-`cmd`+`shift`+`E`). The field at the top takes a package name, the URL of a
-tarball, or the path to a tarball or a directory.
+Open Freelens and go to **Extensions** (`Ctrl`+`Shift`+`E`, on macOS `Cmd`+`Shift`+`E`). The field at the top takes
+the URL of a tarball, or the path to a tarball or a directory.
 
-### From the registry
+### From a release
 
-Enter `@freelensapp/example-extension` and press Install.
+Each [release](https://github.com/thcraft/freelens-pod-file-browser/releases) has the extension as
+`freelens-pod-file-browser-<version>.tgz`, with its checksum in `freelens-pod-file-browser-<version>.tgz.sha256`.
 
-Alternatively, open the following URL in the browser to install directly:
+- Copy the URL of the `.tgz` asset into the field and press **Install**. Freelens downloads the `.tgz.sha256` next to it
+  and checks the tarball against it.
+- Or download both files into one folder and enter the path to the `.tgz`, or drop the `.tgz` on the Freelens window.
 
-[freelens://app/extensions/install/%40freelensapp%2Fexample-extension](freelens://app/extensions/install/%40freelensapp%2Fexample-extension)
+To update, install the newer release the same way.
 
-### From a release tarball
+### From the source
 
-Each [release](https://github.com/freelensapp/freelens-example-extension/releases)
-has the extension as `freelensapp-example-extension-<version>.tgz`, with its
-checksum in `freelensapp-example-extension-<version>.tgz.sha256`. Use a
-release whose major version matches your Freelens version.
+Build it (see [Development](#development)) and enter the path of the checkout, the folder with `package.json`.
+Freelens then runs the extension from that folder and lists it as unverified.
 
-- Enter the URL of the `.tgz` asset and press Install. Freelens downloads the
-  `.tgz.sha256` next to it and checks the tarball against it.
-- Or download both files into one directory and enter the path to the `.tgz`,
-  or drop the `.tgz` on the Freelens window. Freelens checks it against the
-  `.tgz.sha256` next to it.
+## Getting started
 
-### From a directory
+1. Open a cluster in Freelens.
+2. Open the files of a pod in one of three ways:
+   - **Workloads → Pods**, open the menu of a pod (`⋮`) and choose **Browse files**;
+   - click a pod and, in its details, press **Browse files** in the "Files" section;
+   - open **Pod Files** in the cluster sidebar and pick the namespace, the pod and the container.
+3. The browser starts in the working directory of the container. Click folders and path segments to move around,
+   double-click a file to view or edit it, select items with the checkboxes for **Download**, **Permissions** and
+   **Delete**, and drop files from your desktop on the listing to upload them.
 
-Build the extension (see below), then enter the path to your checkout, the
-directory with `package.json`, and press Install. Freelens runs the extension
-from that directory, from the files in `dist/`, and lists it as unverified.
-This is how you work on the extension: see
-[Development loop](#development-loop).
+Opening the pod details runs nothing in the container; the "Files" section starts only when you press **Browse files**.
 
-## Build from the source
+## How it works
 
-### Prerequisites
+The renderer part of the extension draws the browser; it has no access to Node. It asks the main process of the
+extension, over the Freelens IPC of the extension, to do the work. The main process runs the kubectl Freelens itself
+uses, with the environment of the cluster connection (`Main.Shell` of the extension API), so authentication, proxies
+and the kubectl version are the same as in the Freelens terminal.
 
-Use [NVM](https://github.com/nvm-sh/nvm),
-[mise-en-place](https://mise.jdx.dev/), or
-[windows-nvm](https://github.com/coreybutler/nvm-windows) to install the
-Node.js version in `.nvmrc`.
+- Paths are passed to the scripts as positional parameters, never inserted into the script text.
+- Uploads and saves write into a temporary file next to the target and replace the content of the target only when the
+  announced number of bytes arrived. Writing into the target, rather than renaming over it, keeps its owner, mode and
+  hard links. If the connection breaks off hard, a hidden `.pod-file-browser.XXXXXX` file may be left next to the
+  target.
+- Downloads write a `.part` file next to the chosen file and rename it once complete.
+- The listing, reading and other quick operations give up after 60 seconds; deleting, recursive changes and transfers
+  take as long as they need.
 
-From the root of this repository:
+Known limitations: file names containing a newline are not listed correctly, and the editor normalises mixed line
+endings (CRLF and LF) to the prevailing one when you save.
+
+## Development
+
+Built with TypeScript, React and MobX on the
+[Freelens extension API v2](https://github.com/freelensapp/freelens/tree/v2.0.0/docs/extensions), from the
+[freelens-example-extension](https://github.com/freelensapp/freelens-example-extension) template, whose build, type
+check and lint setup it keeps. [AGENTS.md](AGENTS.md) describes the code and the rules for working on it.
+
+| Folder         | Contents                                                                                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/common`   | Types and validation shared by both processes (`protocol.ts`)                                                                                                           |
+| `src/main`     | Main process: IPC handlers and dialogs (`index.ts`), kubectl runner (`kubectl.ts`), container scripts and file operations (`pod-fs.ts`), text encodings (`encoding.ts`) |
+| `src/renderer` | Renderer: registrations (`index.tsx`), the browser and its dialogs (`components/`), the Pod Files page, the pod details section and the pod menu item                   |
+
+Node.js 24 (`.nvmrc`) and pnpm (through corepack):
 
 ```sh
-nvm install
-# or
-mise install
-# or
-winget install CoreyButler.NVMforWindows
-nvm install "$(cat .nvmrc)"
-nvm use "$(cat .nvmrc)"
-```
-
-Install pnpm:
-
-```sh
-corepack install
-# or
-curl -fsSL https://get.pnpm.io/install.sh | sh -
-# or
-winget install pnpm.pnpm
-```
-
-### Build extension
-
-```sh
+corepack enable
 pnpm install
-pnpm build
-```
-
-The extension is built into `dist/`. To pack it into a tarball:
-
-```sh
-pnpm pack
-```
-
-One script to bump the prerelease version, build and pack the extension for
-testing:
-
-```sh
-pnpm pack:dev
-```
-
-The tarball is placed in the current directory. Install it as described in
-[From a release tarball](#from-a-release-tarball).
-
-### Development loop
-
-Install the extension from your checkout once, as described in
-[From a directory](#from-a-directory), then run:
-
-```sh
-pnpm dev
-```
-
-It rebuilds the extension whenever a source file changes, and Freelens
-reloads the extension after each rebuild, without a restart and without
-packing. Stop it with `ctrl`+`C`.
-
-Neither `pnpm build` nor `pnpm dev` type-checks; run `pnpm type:check` for
-that. A change to `main` or `renderer` in `package.json` needs Freelens
-restarted once.
-
-To check the extension in Freelens with an AI agent, see "Checking the
-Extension in Freelens Dev" in [AGENTS.md](AGENTS.md).
-
-### Check the code
-
-```sh
+pnpm build          # dist/main.js, dist/renderer.js, dist/renderer.css
+pnpm dev            # rebuilds on every change; Freelens reloads the extension
 pnpm type:check
 pnpm test:unit
 pnpm lint:check
 pnpm knip:check
 ```
 
-and, for the formats that Biome does not cover:
+For the development loop, install the checkout from its folder once (see [From the source](#from-the-source)) and run
+`pnpm dev`. A change to `main` or `renderer` in `package.json` needs Freelens restarted.
+
+The unit tests run the container scripts in the local POSIX shell where there is one (Git Bash on Windows), so they
+cover the scripts themselves, not only their callers.
+
+**CI.** The workflows in `.github/workflows` type-check, test, build, lint and run Knip on every push and pull request.
+`release.yaml` runs on a `v*` tag: it checks that the tag matches `package.json`, builds and tests the extension, packs
+it into `freelens-pod-file-browser-<version>.tgz` with its `.tgz.sha256`, and creates the GitHub release (0.x and
+versions with a suffix as pre-releases) with the notes from `CHANGELOG.md`. Running it by hand builds the tarball as an
+artifact without releasing anything.
+
+To release, add a `## <version> (<date>)` section to `CHANGELOG.md`, set the version in `package.json`, commit, and tag:
 
 ```sh
-pnpm trunk:check
+git tag -a v0.3.0 -m "Pod File Browser 0.3.0"
+git push origin main v0.3.0
 ```
-
-### Integration tests
-
-The integration tests drive Freelens dev, started from a
-[freelensapp/freelens](https://github.com/freelensapp/freelens) checkout,
-against a [kind](https://kind.sigs.k8s.io/) cluster. In the Freelens checkout:
-
-```sh
-pnpm dev
-```
-
-Freelens dev lists no cluster until a kubeconfig is added in Preferences >
-Kubernetes > Kubeconfig Syncs. Add one with the kind cluster, for example:
-
-```sh
-kubectl config view --minify --flatten --context kind-kind > ~/kind-kind.kubeconfig
-```
-
-Then, with the kind cluster running, in the extension repository:
-
-```sh
-pnpm build
-pnpm test:integration
-```
-
-The tests install the checkout in place, replacing any other installation of
-the extension in Freelens dev. They delete the `examples.example.freelens.app`
-CRD, and with it every `Example`, so use a kind cluster with nothing worth
-keeping. Without Freelens dev or the cluster the tests are skipped.
-
-Optional variables:
-
-- `TEST_KIND_CLUSTER_NAME`: the kind cluster, `kind` by default, used
-  through the context `kind-<name>`.
-- `FREELENS_CDP_URL`: the CDP endpoint of Freelens dev,
-  `http://127.0.0.1:9223` by default.
-- `FREELENS_MAIN_LOG`: a log of the main process to check for errors, such
-  as its `lens.log`. Without it only the renderer's errors are checked.
 
 ## License
 
-Copyright (c) 2025-2026 Freelens Authors.
-
-[MIT License](https://opensource.org/licenses/MIT)
+[MIT](LICENSE) © 2026 thcraft. The build, type check and lint setup comes from
+[freelens-example-extension](https://github.com/freelensapp/freelens-example-extension), MIT © 2025-2026 Freelens
+Authors. The bundled [iconv-lite](https://github.com/pillarjs/iconv-lite) is MIT licensed.

@@ -6,11 +6,15 @@ This file provides guidance to coding agents when working with code in this repo
 
 ## Project Overview
 
-This repository is the reference template for building, type-checking, testing
-and releasing a Freelens extension. The Freelens extension docs
-(`docs/extensions/` in freelensapp/freelens) define the API contract and point
-here for everything around it, so the build, type-check and test patterns in
-this file are the ones other extensions copy, and each comes with its reason.
+This repository is Pod File Browser, a Freelens extension that browses the
+filesystem of the containers of a pod: listing, download, upload, editing
+text files in any encoding, chmod, chown, rename and delete. It started as a
+copy of
+[freelensapp/freelens-example-extension](https://github.com/freelensapp/freelens-example-extension),
+the reference template for Freelens extensions. The build, type-check, lint
+and CI patterns in this file come from that template, each with its reason,
+and are kept as they are; "Architecture" and "Design" describe this
+extension.
 
 - **Language**: TypeScript 7.x
 - **Runtime**: Freelens >= 2.0.0 (extension API v2)
@@ -38,7 +42,7 @@ the catalog rule: `matchManagers: ["npm"]`, the override's key in
 package in `overridePackageName`, and the catalog rule's `rangeStrategy`,
 `minimumReleaseAge` and `groupName`
 (freelensapp/freelens-for-claude-extension@f2f49241828f201890423e070655c2dc04120b23).
-This template has no override. What Freelens does not define (GitHub Actions, the
+This repository has no override. What Freelens does not define (GitHub Actions, the
 tool versions in the workflows, `shx`) Renovate updates as usual.
 pnpm is the exception: Renovate updates it from the npm registry, in a pull
 request of its own, and not to the version of Freelens's `packageManager`.
@@ -90,10 +94,14 @@ An extension that renders `Renderer.Component.MonacoEditor` compiles against
 `monaco-editor` without importing it, so it declares `monaco-editor` in
 `devDependencies` at the host's version as well. `MonacoEditorProps` takes its
 `options` and callback types from that package; without it they are `any`, and
-`skipLibCheck` hides the unresolved import. This template renders no editor and
-does not declare it ("The host-provided libraries, and how to mark them
+`skipLibCheck` hides the unresolved import. This extension renders the editor
+and declares it ("The host-provided libraries, and how to mark them
 external" in Freelens's `migrating-from-v1.md`, and contracts C3 and C11 of
 `api.md`).
+
+The one runtime dependency, `iconv-lite`, is bundled into main and declared in
+`dependencies`. Freelens does not have it, so `.renovaterc.json` excludes it
+from the catalog rule (`"!iconv-lite"`) and Renovate updates it from npm.
 
 ## Common Commands
 
@@ -103,7 +111,6 @@ pnpm type:check                # All of the programs below, in this order
 pnpm type:check:sources        # main and renderer, each with src/common/
 pnpm type:check:tests          # Tests and test support
 pnpm type:check:tooling        # Vite and Vitest configs, build plugins
-pnpm type:check:integration    # Integration tests
 pnpm type:check:environments   # Environment tests
 
 # Linting & formatting
@@ -117,7 +124,6 @@ pnpm knip:check           # Unused files, unused and unlisted dependencies (knip
 
 # Tests
 pnpm test:unit            # vitest
-pnpm test:integration     # vitest, against Freelens dev with a kind cluster
 
 # Build
 pnpm build                # Both Vite runs, without the type check
@@ -136,251 +142,140 @@ pnpm clean:all            # Clean everything (dist, dts, node_modules, tgz)
 
 ```text
 src/
-  main/index.ts                  # Main entry (Main.LensExtension): loads the preferences store
-  renderer/index.tsx             # Renderer entry (Renderer.LensExtension): every registration
-  renderer/api/example/          # Example model per API version (v1alpha1, v1alpha2), with its tests
-  renderer/api/types.ts          # Types shared by the models
-  renderer/pages/                # List page per API version, and their CSS module
-  renderer/details/              # Details panel per API version
-  renderer/menus/                # Suspend/Resume menu item per API version
-  renderer/components/           # createAvailableVersionPage, ErrorBoundary and its registration wrappers, ErrorPage
-  renderer/preferences/          # The preference input and hint
-  renderer/icons/                # SVG icons, imported with ?raw
-  renderer/vars.scss             # SCSS variables
-  common/store/                  # ExamplePreferencesStore, loaded by main and renderer
-test/freelens-extensions.ts      # Runtime stub of @freelensapp/extensions for Vitest
+  common/protocol.ts              # IPC channels, shared types, path helpers, mode/owner validation, text encodings
+  main/index.ts                   # Main entry (Main.LensExtension): IPC handlers, open/save dialogs, picked files
+  main/kubectl.ts                 # Runs the host's kubectl with the cluster's environment; exec and sh -c arguments
+  main/pod-fs.ts                  # The container scripts (POSIX sh) and the file operations built on them
+  main/encoding.ts                # Default encoding, binary detection, decoding and encoding with iconv-lite
+  main/local-names.ts             # Local file names for downloads that Windows accepts
+  renderer/index.tsx              # Renderer entry (Renderer.LensExtension): every registration
+  renderer/ipc.ts                 # Renderer.Ipc client: one typed function per channel
+  renderer/pages/                 # The "Pod Files" cluster page: namespace, pod and container in the URL
+  renderer/details/               # The "Files" section of the pod details
+  renderer/menus/                 # "Browse files" in the pod menu, which opens the page
+  renderer/components/            # FileBrowser and its dialogs, PathBar, ErrorBoundary and ErrorPage
+  renderer/pod-containers.ts      # Containers of a host Pod object, the default container, labels
+  renderer/format.ts              # Sizes, times, sorting, permissions to octal, editor language
+  renderer/icons/                 # The sidebar icon
+test/freelens-extensions.ts       # Runtime stub of @freelensapp/extensions for Vitest
 environment-tests/               # Probes for the per-environment programs
 build/                           # Vite plugins: host modules, standard decorators, CSS module declarations
-integration/__tests__/           # Integration tests, run against Freelens dev over CDP, and their shared module
-integration/fixtures/            # Test objects of the integration tests per API version
-examples/                        # CRDs and test objects per API version
-skills/                          # Agent skills for other repositories (see "Agent Skills")
 ```
 
 Build output goes to `dist/`: `main.js`, `renderer.js` and `renderer.css`, with
 source maps. `main` and `renderer` in `package.json` point at the two entries.
 
-## CRD KubeObject Pattern
+## Design
 
-A model is a subclass of `Renderer.K8sApi.LensExtensionKubeObject`, one file
-per API version: `src/renderer/api/example/example-v1alpha1.ts` and
-`example-v1alpha2.ts`, each exporting a class named `Example`.
+### Two processes
 
-The host reads the model's metadata from the class, through `static readonly`
-properties. The objects it hands to the extension, in a list, a details panel
-or a menu item, come from the host's store for the resource: they are instances
-of the host's `KubeObject`, not of the extension's subclass. The methods of
-`KubeObject` itself are there (`getName()`, `getNs()`,
-`getCreationTimestamp()`, `getSearchFields()`); a method the subclass defines
-is not, and calling it throws. So:
+The renderer has no Node and no Electron ("Rules That Fail Silently"), so
+everything that runs a process, touches a local file or shows a native dialog
+is in main, behind `Renderer.Ipc` / `Main.Ipc`. Every channel is named in
+`IpcChannel` of `src/common/protocol.ts`, with one function per channel in
+`src/renderer/ipc.ts`. Every main handler answers with an `IpcResult`, so the
+renderer gets the message as it was thrown rather than wrapped by Electron.
 
-- **Metadata**: `static readonly` `kind`, `namespaced`, `apiBase` and `crd`.
-- **Instance type**: `declare kind` and `declare apiVersion`, with the class's
-  kind and version as literals. Two versions of a kind usually differ only in
-  optional fields, so without the literals their classes are assignable to
-  each other, and `detailsFor` and `menuItemFor` accept a component written
-  for the other version (see "Renderer Components"). `declare` emits nothing,
-  so the runtime object is the host's as before.
-- **Per-object logic**: a `static` method that takes the object, such as
-  `Example.getSuspended(object)`.
-- **Fields**: read `object.spec` and `object.status` through the model's typed
-  `ExampleSpec` and `ExampleStatus`.
-- **Forbidden**: instance methods on the subclass; a fallback such as
-  `typeof (object as any).getSuspended === "function" ? ...`, which always
-  takes the fallback; `as any`.
+Main does not trust the renderer for local files: `upload-files` takes only
+paths that the open dialog of main returned (`pickedFiles` in
+`src/main/index.ts`), and downloads go only where the save or folder dialog of
+main says.
 
-```typescript
-export class Example extends Renderer.K8sApi.LensExtensionKubeObject<
-  Renderer.K8sApi.KubeObjectMetadata,
-  ExampleStatus,
-  ExampleSpec
-> {
-  declare kind: "Example";
-  declare apiVersion: "example.freelens.app/v1alpha2";
+### Running commands in a container
 
-  static readonly kind = "Example";
-  static readonly namespaced = true;
-  static readonly apiBase = "/apis/example.freelens.app/v1alpha2/examples";
+`runKubectl` in `src/main/kubectl.ts` runs the kubectl and the environment
+that `Main.Shell.getKubectlPath(clusterId)` and `getEnvironment(clusterId)`
+return (contract C15 of `api.md`), so authentication, proxies and the kubectl
+version are those of the Freelens terminal. Both are cached per cluster for a
+minute, and only while the kubeconfig the environment names exists: a
+disconnect removes it. Never build a kubeconfig or a kubectl path of your own.
 
-  static readonly crd: ExampleKubeObjectCRD = {
-    apiVersions: ["example.freelens.app/v1alpha2"],
-    plural: "examples",
-    singular: "example",
-    shortNames: ["ex"],
-    title: "Examples",
-  };
+Every operation is a POSIX `sh` script in `src/main/pod-fs.ts`, run as
+`kubectl exec … -- sh -c <script> sh <args>`:
 
-  static getSuspended(object: Example): boolean {
-    return object.spec.suspended ?? false;
-  }
-}
+- **Paths are positional parameters** (`"$1"`, `"$@"`), never part of the
+  script text. Paths from the renderer are absolute, so none can be taken for
+  an option; values that are not paths (mode, owner) are validated in both
+  processes (`isValidMode`, `isValidOwner`) and may not start with `-`.
+- **BusyBox compatible.** Only POSIX sh and the options BusyBox has: `stat -c`,
+  `head -c`, `mktemp`, `readlink`, `tar cf`, `set -C`. A script must work when
+  an optional tool is missing where the README says so (`stat`, `mktemp`).
+- **The listing protocol** is line based with `/` as the field separator,
+  which no file name contains (`parseListing`); names with a newline are a
+  known limitation.
+- **Writes are staged.** `WRITE_SCRIPT` receives the expected byte count,
+  writes stdin to a `mktemp` file next to the target and copies it into the
+  target only when the count matches, so a transfer that breaks off leaves the
+  target as it was. It writes into the target rather than renaming over it, to
+  keep owner, mode and hard links.
+- **Downloads are staged locally** in a `.part` file that is renamed over the
+  chosen file only when complete.
+- **Timeouts.** Quick operations (`exec` with its default) give up after 60 s;
+  delete, recursive chmod/chown and transfers pass no timeout.
 
-export class ExampleApi extends Renderer.K8sApi.KubeApi<Example> {}
-export class ExampleStore extends Renderer.K8sApi.KubeObjectStore<Example, ExampleApi> {}
-```
+The unit tests run the scripts in the local POSIX shell
+(`src/main/pod-fs-scripts.test.ts`, Git Bash on Windows); add a test there for
+every new script or behaviour of one. Tests that need mode bits or symlinks are
+skipped on Windows.
 
-The file also exports a `KubeApi` and a `KubeObjectStore` subclass. The list
-page uses the `KubeApi` type for `KubeObjectListLayout`; neither is
-instantiated, because the store comes from the host, through
-`Example.getStore()`.
+### Text and encodings
 
-`src/renderer/index.tsx` registers each version's details panel
-(`kubeObjectDetailItems`) and menu item (`kubeObjectMenuItems`) with
-`Renderer.K8sApi.detailsFor` and `Renderer.K8sApi.menuItemFor`, which take
-`kind` and `crd.apiVersions` from the model class, and one "Examples" page
-(`clusterPages`, `clusterPageMenus`).
-That page is made by `createAvailableVersionPage` from the list pages of both
-versions, newest first: it renders the first one whose store the host has,
-and a "not available" message when the cluster serves neither.
+`readFile` reads the first 8 KiB (`SNIFF_SIZE`) and the size. NUL bytes
+outside UTF-16 make a file binary: it is not read further unless the user
+picks an encoding, and it is never editable, because Monaco may change line
+endings. Text is read up to `MAX_EDITABLE_FILE_SIZE` plus one byte, to tell a
+file that grew from one that fits. Files open as UTF-8, or UTF-16 by its byte
+order mark; nothing else is guessed. A file is editable only when its content
+encodes back to exactly the bytes read (`lossless`), and `encodeText` refuses
+characters the encoding cannot hold instead of letting iconv-lite write `?`.
+`iconv-lite` is the one bundled runtime dependency.
 
-`customResources` lists the model classes of both versions. The host reads the
-group and plural from each class's `crd`, and while the extension is enabled
-it leaves the resource out of the Custom Resources tree of the cluster
-sidebar, where it would otherwise be listed a second time next to the
-"Examples" page. Both versions name the same group and plural, so either class
-alone would do; both are listed so that removing one version leaves the other
-registered. The definition stays in the Definitions list, and the host's own
-list and details stay reachable by URL and from the command palette. A model
-the extension only decorates, with a details panel or a menu item and no page
-of its own, stays out of the field: registered, it would leave the tree with
-nothing in its place. The host rejects an entry it cannot read (no `kind`, no
-`crd` or `apiBase`, a core-group resource) with an error in the log, and the
-resource stays in the tree (contract C6 of `api.md`).
+### Renderer
 
-The page it returns is an `observer`. `getStore()` reads the host's API
-registry, which is observable, and the host registers a CRD's APIs only after
-the cluster frame has loaded the CRDs. Freelens restores the last page when a
-cluster is opened, so the page often renders before that; as an `observer` it
-renders again when the version is served, and otherwise it keeps showing "not
-available" until the user navigates away and back. Any component that chooses
-a version through `getStore()` is an `observer` for the same reason.
-`src/renderer/components/available-version.test.tsx` checks it: its spy on
-`getStore` reads an observable, and the page follows when the test sets it.
-
-### Adding an API
-
-A new kind, or a new version of a kind, takes the same set of files as
-`Example`, one per version. The steps, in order:
-
-1. **The types.** They follow the API of the controller that serves the
-   resource, read from its sources at the release that serves the version,
-   and not from memory: the Go types when the controller is written with
-   kubebuilder, otherwise the `openAPIV3Schema` of the CRD.
-   - Every Go struct has a TypeScript interface of the same name, with the
-     same fields under their `json` names.
-   - A field is optional in the interface when the CRD does not require it.
-     `controller-gen` decides that from the markers, not from the `json` tag:
-     `+required` (or `+kubebuilder:validation:Required`) makes the field
-     required and `+optional` (or `+kubebuilder:validation:Optional`) makes
-     it optional, whatever the tag says. A field without a marker is
-     optional with `omitempty` and required without it, unless the package
-     sets `+kubebuilder:validation:Optional`, which makes every such field
-     optional. Current API conventions pair `+required` with `omitempty`, so
-     `omitempty` alone does not make a field optional. When the types come
-     from the `openAPIV3Schema`, a field is required when it is in the
-     `required` list of its object. The generated CRD settles any doubt.
-   - The API server validates every object against the CRD, so a required
-     field is present. The one exception is a field that a newer CRD made
-     required, on an object stored before; a list column or details panel
-     shows `-` when it is missing, and the type does not allow for it.
-   - Every `+kubebuilder:validation:Enum` (an `enum` in the schema) is a
-     string-literal union type alias, used by the fields that have it, such
-     as `export type ReflectionPolicy = "Always" | "IfNotPresent" | "Never";`.
-   - A type that several kinds or versions share goes to
-     `src/renderer/api/types.ts` and has the fields of every version it
-     covers, optional where one of them omits it.
-   - A new version of a kind starts as a copy of the newest version's files;
-     the diff of the Go types between the two releases says what changes.
-2. **The model**, `src/renderer/api/<kind>/<kind>-<version>.ts`, as in "CRD
-   KubeObject Pattern": the class with the `static readonly` metadata, the
-   `declare kind` and `declare apiVersion` literals, `static` helpers for the
-   per-object logic, and the `KubeApi` and `KubeObjectStore` subclasses.
-   `apiBase`, `crd.apiVersions` and `declare apiVersion` name the group and
-   version, `crd` the plural, singular and short names of the CRD.
-3. **The list page** per version in `src/renderer/pages/`, joined into one page
-   per kind by `createAvailableVersionPage`, newest version first, and
-   registered once in `clusterPages` and `clusterPageMenus`.
-4. **The details panel** per version in `src/renderer/details/`, registered in
-   `kubeObjectDetailItems` with `Renderer.K8sApi.detailsFor` and the version's
-   model class.
-5. **Menu items** per version in `src/renderer/menus/`, registered in
-   `kubeObjectMenuItems` with `Renderer.K8sApi.menuItemFor` and the version's
-   model class, only for what the resource supports: a
-   Suspend/Resume item needs a suspend field in its spec, an action that
-   annotates the object needs a controller that reads the annotation.
-6. **`customResources`**: the model class of every version that has a page.
-7. **Tests** for the static helpers, next to the model, and for any logic in
-   the page or panel; a member of the host that a test reaches goes into the
-   stub, as small as the test needs.
-8. **`examples/<version>/`**: the CRD and a test object, applied with
-   `kubectl apply -k` as `README.md` shows, and a row per version in the
-   resource table of `README.md`.
-
-Then check the result in Freelens dev ("Checking the Extension in Freelens
-Dev"): the page lists the test object, the details show every field, the
-menu items work, and the resource is gone from the Custom Resources tree.
+- `FileBrowser` (`src/renderer/components/file-browser.tsx`) is the one
+  browser: the page and the pod details only choose the target and the path
+  around it and pass `compact` for the details. New browser features go into
+  `FileBrowser` or its dialogs, never into one of the two hosts.
+- **A listing belongs to its target and path** (`listingKey`). While another
+  one loads, the old one is not shown and no action can start, so that no
+  action runs with names of one container against another.
+- **One action at a time.** `run()` refuses a second action (`busyRef`), and
+  every way to start one, toolbar, row icons, drag and drop, is disabled while
+  `ready` is false.
+- The page keeps namespace, pod, container and path in `PageParam`s. The
+  host's `Select` calls `onChange` inside a mobx action, where several
+  `PageParam.set()` calls each start from the old URL; change several params
+  with `setRaw`/`clear` in one `runInAction` (`updateParams`).
+- The page takes its pods from the host's `Renderer.K8sApi.podsStore`, loaded
+  with `loadAll({ namespaces: [ns], merge: true })`, which replaces the pods of
+  that namespace only. Read the store inside a component: the renderer entry
+  loads in the root frame too, which has no cluster and no pod store.
+- The pod details section runs nothing in the container until the user
+  presses "Browse files".
 
 ## Renderer Components
 
 - Pages and details panels are `observer` components from `mobx-react`, which the build maps to the host's copy.
 - Every page, details panel and menu item renders inside an `ErrorBoundary` from
-  `src/renderer/components/error-boundary.tsx`, a class component of the host's React with `getDerivedStateFromError`
-  and `componentDidCatch`. It logs what its children throw while React renders them with `extension.name` and the
-  component stack, and renders `ErrorPage` in place of a page or a details panel, and nothing in place of a menu item,
-  where an error page does not fit. A details panel or menu item renders again when the host passes a new `object`,
-  which is the boundary's reset key.
-  - The boundary is applied where the registrations are made: `clusterPages`, `kubeObjectDetailItems` and
-    `kubeObjectMenuItems` are mapped through `withPageErrorBoundary`, `withDetailsErrorBoundary` and
-    `withMenuItemErrorBoundary`, each taking `this` and a registration, so an entry added to a field is wrapped as well.
-    A `globalPages` field is mapped through `withPageErrorBoundary` too. Each field is annotated with its type from
-    `Renderer.LensExtension` (`clusterPages: Renderer.LensExtension["clusterPages"] = [...]`), because the mapping
-    refers to `this`, and its type would otherwise depend on itself.
-  - The wrappers take the registration that `Renderer.K8sApi.detailsFor` and `menuItemFor` built, so the helpers check
-    each component against its model first, with no cast.
-  - A `try`/`catch` around the call of a component is not enough. It sees only what the call throws, and the errors
-    that matter come later: a child component throws when React renders it, and a callback such as
-    `renderTableContents`, `getItems` or `customizeHeader` of `KubeObjectListLayout` throws when the host calls it from
-    its own render. Such an error goes up to the nearest boundary of the host: the one around the main area of a
-    cluster for a list page, and the one around the whole cluster frame for a details panel or a menu item, because the
-    host has none around the details drawer or a menu item of an extension.
-  - The boundary has no decorators and no `observer`; it reads no observable, and the components inside it are
-    observers of their own.
-- Pages, details and menu items import their CSS module for the class names only, with no `?inline` import and no
-  `<style>` tag; the rules reach the page through `renderer.css` (see "CSS"). SCSS variables are in
-  `src/renderer/vars.scss`, used with `@use "../vars"`.
-- SCSS modules get TypeScript declarations (`*.module.d.scss.ts`), written during the renderer build (see
-  "CSS module declarations"). They are committed, because `pnpm type:check` and `type-check.yaml` run without a build;
-  commit the regenerated file with a change to its SCSS module. `pnpm clean:dts` removes them.
-- Icons are SVG files imported with `?raw` and rendered by `Renderer.Component.Icon` through its `svg` prop.
-- The `kubeObjectDetailItems` and `kubeObjectMenuItems` registrations in `src/renderer/index.tsx` are made by
-  `Renderer.K8sApi.detailsFor(Example, { priority: 10, Details })` and
-  `Renderer.K8sApi.menuItemFor(Example, { MenuItem })`, not written out with `kind` and `apiVersions`. The helper takes
-  both from the model class and types the props of `Details` and `MenuItem` from it, so a wrapper that passes more
-  props, such as `(props) => <Details {...props} extension={this} />`, needs no props annotation, and a component
-  written for another model fails the type check. The
-  check is structural: it tells two versions of one kind apart only by the `declare apiVersion` literal of each model
-  ("CRD KubeObject Pattern").
-- The props of a details panel are, or extend, `Renderer.Component.KubeObjectDetailsProps<Example>`, and those of a menu
-  item `Common.Types.KubeObjectMenuItemProps<Example>`: the concrete model class, never `any`, and only what the host
-  passes. A menu item does not extend `Renderer.Component.KubeObjectMenuProps`, the props of the host's whole
-  `KubeObjectMenu` (`id`, `editable`, `removable`, `onMenuReady` and more). That compiles, because both require only
-  `object`, and the item then promises props the host never passes.
-- The host renders a cluster page with `params` only. A page that needs the extension gets it from the registration
-  (`Page: () => <ExamplesPage extension={this} />`), with the page component created once, outside the registration.
-  `PageComponents.Page` is typed with the props the host passes, `Common.Types.PageComponentProps`, so the type check
-  rejects a page that requires another prop. It does not reject one that declares another prop as optional next to
-  `params`; that prop is `undefined`.
-- When porting another extension from v1, expect the type check to reject `clusterPages` and `globalPages`
-  registrations that compiled under v1 and get `undefined` at runtime:
-  - a component that requires props, passed as the page itself: `Page: createAvailableVersionPage(...)`, or
-    `Page: MyPage` where `MyPage` takes `extension`;
-  - a wrapper that declares the prop instead of passing it: `Page: (props: { extension: ... }) => <MyPage {...props} />`;
-  - a page whose props type names its parameters (`{ params?: { query: PageParam } }`).
-
-  Pass what the page needs from the registration, as above, rather than loosening the props type. A page that reads a
-  named parameter takes `Common.Types.PageComponentProps` and reads `params.<name>.get()`: the host knows the names
-  only from the registration's `params`, at runtime. The other registered components are typed the same way:
-  `appPreferences` `Input` and `Hint` get no props, and a `kubeObjectMenuItems` `MenuItem` gets `object` and `toolbar`.
+  `src/renderer/components/error-boundary.tsx`. It logs what its children throw with `extension.name` and the
+  component stack, and renders `ErrorPage` in place of a page or a details panel, and nothing in place of a menu item.
+  `clusterPages`, `kubeObjectDetailItems` and `kubeObjectMenuItems` are mapped through `withPageErrorBoundary`,
+  `withDetailsErrorBoundary` and `withMenuItemErrorBoundary`, each annotated with its type from
+  `Renderer.LensExtension`, so an entry added to a field is wrapped as well. A `try`/`catch` around the call of a
+  component is not enough: a child throws when React renders it, after the call.
+- The pod details section and the pod menu item are registered with `Renderer.K8sApi.detailsFor` and
+  `Renderer.K8sApi.menuItemFor` and the host's `Renderer.K8sApi.Pod`, so their props are typed with the pod. The
+  objects the host passes are its own `Pod` instances.
+- Components import their CSS module for the class names only, with no `?inline` import and no `<style>` tag; the
+  rules reach the page through `renderer.css`. SCSS variables are in `src/renderer/vars.scss`, used with
+  `@use "../vars"`. The `*.module.d.scss.ts` declarations are written by the renderer build and committed; run
+  `pnpm build` after changing a stylesheet.
+- The host renders a cluster page with `params` only, and a details panel or a menu item with `object` (and
+  `toolbar`); anything else, such as the extension, comes from the registration
+  (`(props) => <PodFilesDetails {...props} extension={this} />`).
+- Use the host's components (`Renderer.Component`: `Button`, `Input`, `Select`, `NamespaceSelect`, `Dialog`,
+  `ConfirmDialog`, `Notifications`, `MonacoEditor`, `Icon`) and its CSS variables (`--textColorPrimary`,
+  `--borderFaintColor`, ...), so the extension follows the theme.
 
 ## Rules That Fail Silently
 
@@ -594,14 +489,13 @@ Main code runs in Node, renderer code in a browser page, and common code in
 both. Each is type-checked in a program of its own, so that an API the runtime
 does not have fails `pnpm type:check` rather than the extension:
 
-| Config                       | lib                       | types                             | Files                                                              |
-| ---------------------------- | ------------------------- | --------------------------------- | ------------------------------------------------------------------ |
-| `src/main/tsconfig.json`     | ES2024                    | `node`                            | `src/main/`, `src/common/`                                         |
-| `src/renderer/tsconfig.json` | ES2024, DOM, DOM.Iterable | `vite/client`                     | `src/renderer/`, `src/common/`                                     |
-| `src/common/tsconfig.json`   | ES2024, WebWorker         | none                              | `src/common/`                                                      |
-| `src/tsconfig.json`          | ES2024, DOM, DOM.Iterable | `node`, `vite/client`             | `*.test.ts(x)` under `src/`, and `test/`                           |
-| `integration/tsconfig.json`  | ES2024, DOM, DOM.Iterable | `node`, `@freelensapp/extensions` | `integration/`                                                     |
-| `tsconfig.json`              | ES2024                    | `node`                            | `vite.config.mjs`, the Vitest configs, `svgo.config.mjs`, `build/` |
+| Config                       | lib                       | types                 | Files                                                              |
+| ---------------------------- | ------------------------- | --------------------- | ------------------------------------------------------------------ |
+| `src/main/tsconfig.json`     | ES2024                    | `node`                | `src/main/`, `src/common/`                                         |
+| `src/renderer/tsconfig.json` | ES2024, DOM, DOM.Iterable | `vite/client`         | `src/renderer/`, `src/common/`                                     |
+| `src/common/tsconfig.json`   | ES2024, WebWorker         | none                  | `src/common/`                                                      |
+| `src/tsconfig.json`          | ES2024, DOM, DOM.Iterable | `node`, `vite/client` | `*.test.ts(x)` under `src/`, and `test/`                           |
+| `tsconfig.json`              | ES2024                    | `node`                | `vite.config.mjs`, the Vitest configs, `svgo.config.mjs`, `build/` |
 
 All of them extend `tsconfig.base.json`, which has the compiler options of
 Freelens's fixture extension: `strict`, `moduleResolution: Bundler`,
@@ -717,7 +611,7 @@ the test needs. The other host modules are not stubbed: `react`, `mobx` and
 
 Vitest runs the development build of mobx, so a test that imports
 a class with `@observable` on a field without `accessor` fails when the class
-is defined; `src/common/store/preferences-store.test.ts` relies on that.
+is defined; a test that imports such a class catches it.
 
 The root `tsconfig.json` checks the tooling files. It has `checkJs`, so the
 Vite config and the build plugins are type-checked too; give their function
@@ -773,10 +667,9 @@ out, together with `pnpm-lock.yaml` and `pnpm-workspace.yaml`, which pnpm
 writes, and `.trunk/`, whose `trunk.yaml` `trunk upgrade` rewrites.
 
 The Markdown rules are in `nursery`. `markdown.parser.frontmatter` is on for
-the YAML frontmatter of the `SKILL.md` files; without it Biome reads the
-opening `---` as a thematic break and inserts a blank line after it. Biome does
-not rewrap a paragraph, so the template of the migration issue keeps one
-paragraph per line ("Agent Skills").
+YAML frontmatter in Markdown files; without it Biome reads the opening `---` as
+a thematic break and inserts a blank line after it. Biome does not rewrap a
+paragraph.
 
 ### Knip
 
@@ -821,204 +714,49 @@ problem does not show.
 
 ### Workflows
 
-| Workflow                 | Runs                                                                          |
-| ------------------------ | ----------------------------------------------------------------------------- |
-| `type-check.yaml`        | `pnpm type:check`                                                             |
-| `check.yaml`             | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                            |
-| `unit-tests.yaml`        | `pnpm test:unit`                                                              |
-| `trunk-check.yaml`       | `trunk check --all`                                                           |
-| `integration-tests.yaml` | the integration tests in `integration/`, against Freelens dev                 |
-| `mise-lock-check.yaml`   | on a change to `mise.lock`: no checksum changed for an unchanged tool version |
-| `cleanup-cache.yaml`     | on a closed pull request: deletes the caches of its merge ref                 |
+| Workflow               | Runs                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `type-check.yaml`      | `pnpm type:check`                                                                |
+| `check.yaml`           | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                               |
+| `unit-tests.yaml`      | `pnpm test:unit`                                                                 |
+| `trunk-check.yaml`     | `trunk check --all`                                                              |
+| `mise-lock-check.yaml` | on a change to `mise.lock`: no checksum changed for an unchanged tool version    |
+| `cleanup-cache.yaml`   | on a closed pull request: deletes the caches of its merge ref                    |
+| `release.yaml`         | on a `v*` tag: type check, tests, build, pack with `.tgz.sha256`, GitHub release |
 
-The type check has a workflow of its own, on pull requests and on pushes to
-`main`, as in Freelens. It runs every program, tests, tooling and environment
-tests included, which no build reaches, and a type error shows as its own
-failed check rather than as a failed build. `check.yaml` builds without the
-type check for the same reason, so it does not run twice.
+The type check has a workflow of its own, as in Freelens, so that a type error
+shows as its own failed check rather than as a failed build. `check.yaml`
+builds without the type check for the same reason, so it does not run twice.
 
-The integration tests are a pattern for other extensions to copy, not part of
-the extension API contract; an extension may leave them out. They run in this
-repository, under its own Vitest (`vitest.integration.config.ts`,
-`pnpm test:integration`), against Freelens started with `pnpm dev` from a
-freelensapp/freelens checkout. They attach to
-it with Playwright's `chromium.connectOverCDP` on the port that script opens
-(see "Checking the Extension in Freelens Dev"), so they need no package of
-Freelens and no file of its checkout; Freelens dev is the only dependency, and
-it is not in `package.json`. `playwright` is a devDependency at the version of
-Freelens's catalog. The workflow builds the extension, checks out Freelens at
-each release tag of its matrix (`v2.0.0`), starts `pnpm dev` there in the background under `xvfb-run`, with its output in
-a file and a fresh profile in `FREELENS_INTEGRATION_TESTING_DIR`, waits until
-the CDP endpoint answers, and runs `pnpm test:integration` here. The job
-`integration tests` waits for every job of the matrix and fails when one of
-them did not succeed; the branch rules require it rather than the jobs of the
-matrix, whose names change with the matrix. A profile of
-Freelens dev syncs no kubeconfig by default, so the workflow seeds the fresh
-one with a single sync entry, a file with the kind cluster alone, and the
-catalog lists that cluster and nothing else. Every test
-file is a session of its own on the one app, and fails on any error logged by
-either process:
+`release.yaml` fails when the tag does not match `version` in `package.json`.
+It packs `freelens-pod-file-browser-<version>.tgz` and writes its
+`sha256sum` line into `<tarball>.sha256`: Freelens checks a tarball installed
+from a URL against that file next to it. The release notes are the section of
+the version in `CHANGELOG.md`; 0.x versions and versions with a suffix are
+pre-releases. Run by hand, the workflow keeps the tarball as an artifact and
+releases nothing.
 
-- `extensions.tests.ts` uninstalls whatever installation of the extension the
-  app has, installs this checkout in place from the Extensions page and opens
-  its preferences page, without changing the preference: the extension's tab
-  in the "Extensions" tab group shows the title and the checkbox label of its
-  `appPreferences` entry. It needs no cluster.
-- `example-v1alpha1.tests.ts` and `example-v1alpha2.tests.ts` open the kind
-  cluster with the CRD of one API version and its test object, and click
-  through the extension's views: the list page shows a row for the object,
-  its details show the extension's panel with `Api Version` set to the
-  session's version and no error page of the error boundary, and the row's
-  menu lists the extension's `Suspend` item, which is not clicked. Each view
-  is an `it` that navigates from the sidebar itself, so that it does not
-  depend on the state another left. They do not check the columns, every
-  field, what a menu action does, or the Custom Resources tree. They keep an
-  in-place installation of this checkout that is enabled, and install it
-  otherwise.
+To release: add a `## <version> (<date>)` section to `CHANGELOG.md`, set the
+same version in `package.json`, commit, tag `v<version>` and push the tag.
 
-The tests are deterministic, so nothing retries them: the config sets no
-`retry`, and the workflow runs the step once, under `timeout 600`. A retry
-repeats the same failure, and every view of a session waits its full timeout
-before it fails. The one exception is the cluster frame, which `openKindCluster`
-loads a second time when it did not render and the dev file route of Freelens
-failed a request meanwhile (see below); that failure is of Freelens dev, not of
-a test.
+## Checking the Extension in Freelens
 
-The sessions reach the app through its renderer only; the main process, and
-with it the application menu, is out of reach of CDP. They navigate the root
-frame with `Renderer.Navigation.navigate` of the extension API, find the kind
-cluster with `Renderer.Catalog.catalogEntities` by its name, `kind-<name>`,
-and connect it by navigating to `/cluster/<id>` and disconnect it with the
-entity's `disconnect()`. `browser.close()` of a browser connected over CDP
-closes only the connection, so a session ends with it and the app keeps
-running. The renderer's console carries the errors of the root frame and of
-every cluster frame; the main log is read from the file that
-`FREELENS_MAIN_LOG` names, from its size when the session started, and every
-line that starts with `error:` counts, also after a task prefix that turbo
-may add, such as `freelens:dev:`, except
-`proxy_server.go:… Error while proxying request: context canceled`, which the
-Kubernetes proxy of Freelens logs for a request that the renderer aborts.
-Freelens dev renders in `React.StrictMode`, which mounts every view twice and
-aborts the requests of the first mount, so the line comes and goes with the
-timing of a run; it names no request and says nothing about the extension.
-Without the variable only the renderer is checked. A renderer error carries its location, line and column included,
-and the worker that logged it. Its text is the preview of its arguments, which
-is empty for some objects and only the class name for others, such as
-`ErrorEvent`; such an error is described from its arguments, read from the
-page, and an empty one without arguments, which the browser itself logs, gets
-its time, to find it in the main log. An uncaught value that is not an `Error`
-reaches the session as a page error with an empty stack, and is described by
-its name and message, with its time.
+There are no integration tests: the functional checks of a change run by hand,
+against a cluster with a pod whose container has a shell, preferably one with
+BusyBox (such as `busybox` or an Alpine image) and one with GNU coreutils
+(such as Debian), since the container scripts must work on both. Check
+listing, download of a file and of a folder, upload by dialog and by drop,
+editing a UTF-8 file and a Windows-1250 file, Permissions, rename and delete,
+in the page and in the pod details.
 
-The dev file route of Freelens dev, which serves the renderer's modules from
-the Vite dev server, logs a request that fails as a warning
-(`[DEV-FILE-ROUTE]: request for … failed`): its keep-alive agent at times
-reuses a socket that the dev server is closing, and the request fails with
-`ECONNRESET`. The route answers such a request with a 502, and Chromium logs
-`Failed to load resource: the server responded with a status of 502`; that
-error is left out when the main log has the failed request for its URL. When
-the module belongs to Monaco's editor worker, which a YAML view starts, the
-worker does not load, and Monaco rethrows its `error` event, an `Event` with
-no name, which is left out when the main log has a failed request. When the
-module belongs to the cluster frame, such as one of Freelens's own
-stylesheets, the frame does not render its sidebar, and `openKindCluster`,
-after its timeout, loads the frame again once, only if the main log has a
-failed request since the cluster was opened.
-
-The workflow sets `TURBO_LOG_ORDER=stream` for `pnpm dev`: in GitHub Actions
-turbo otherwise groups the output of a task until it ends, and the persistent
-`dev` task never ends, so the log would stay empty.
-
-There is one session per API version because the cluster and the app are
-singletons: the CRD `examples.example.freelens.app` is one object, whose
-`examples/v1alpha1` definition serves v1alpha1 only and whose
-`examples/v1alpha2` definition serves both versions, and the app reads which
-versions are served when it connects to the cluster. So the v1alpha1 session
-checks that the page falls back to the v1alpha1 list, and the v1alpha2
-session that it picks v1alpha2, the newest version. Vitest runs the files one
-at a time (`fileParallelism: false`), in no set order, and none depends on
-another having run: each session disconnects the kind cluster, removes the
-leftovers of an earlier run (the namespace `integration-tests` and the CRD),
-applies the CRD from `examples/<version>/crds`, waits until it is
-established, applies `integration/fixtures/<version>/` (the object of
-`examples/<version>/test`, in the namespace `integration-tests`, which the
-kustomization creates), and only then connects the cluster. The session then
-selects `integration-tests` in the namespace filter of the extension's own
-page, which its `KubeObjectListLayout` renders for a namespaced resource,
-unless the filter already shows it: a new cluster shows only `default`, and
-the app keeps the selection for every namespaced list of the cluster. Without
-it the page lists nothing, and every view fails on its timeout. The session
-opens no page of the host, whose requests can log errors of their own: the
-Pods page asks for pod metrics, and kind has no metrics server. A session's
-teardown stops collecting the errors first, then disconnects the cluster, so
-that the app logs no watch error for a CRD deleted under it, then deletes the
-fixtures and the CRD with `--wait`, also when a test failed, and then checks
-the errors. The app refreshes the cluster's permissions while it disconnects
-it, and when the refresh loses the race, its requests fail on its own proxy
-(`[AUTHORIZATION-REVIEW]`, `[AUTHORIZATION-NAMESPACE-REVIEW]`,
-`[FREELENS-PROXY]` with `Cluster <id> is not connected` or `The client is
-destroyed`); those errors come and go with the timing of a run and say
-nothing about the extension, and the session no longer collects them.
-
-The code the sessions share is in `integration/__tests__/extension-helpers.ts`:
-connecting to the app with the error collector, installing the extension,
-connecting and disconnecting the kind cluster, kubectl, and the selectors. Its
-name does not match `*.tests.ts`, so Vitest does not collect it.
-`integration/tsconfig.json` compiles the directory with Node and the DOM,
-because the callbacks of `page.evaluate` run in the page, and with the types
-of `@freelensapp/extensions`, which declare `globalThis.FreelensExtensionApi`
-for them.
-
-Three variables configure the sessions. `FREELENS_CDP_URL` is the CDP
-endpoint (`http://127.0.0.1:9223` by default), `FREELENS_MAIN_LOG` the main
-log, and `TEST_KIND_CLUSTER_NAME` names the kind cluster (`kind` by default,
-`freelens` in the workflow); every kubectl call names its context,
-`kind-<name>`, so a run never acts on the current context. The checkout to
-install, and the manifests, are found from the location of the helpers. Outside
-CI a session skips with a warning when Freelens dev does not answer or the
-cluster is not reachable; in CI (`CI` set) the run fails instead, so that a
-mistake in the workflow does not turn into a silent skip.
-
-Run locally, the tests act on the profile of Freelens dev, `FreelensDev`,
-which is apart from that of an installed Freelens: they navigate its window,
-leave this checkout installed in place, uninstalling another installation of
-the extension, and leave the kind cluster disconnected, with the namespace
-filter set to `integration-tests`. They touch no other cluster of the
-catalog. The profile lists the kind cluster only once its kubeconfig is in
-"Kubeconfig Syncs" (see "Checking the Extension in Freelens Dev"); without
-it the cluster sessions fail on the timeout of finding the cluster. A run
-deletes the CRD `examples.example.freelens.app`, and with it every `Example`
-on the cluster: run it only against a kind cluster with nothing worth
-keeping.
-
-## Checking the Extension in Freelens Dev
-
-The functional checks of a change run against Freelens started with
-`pnpm dev` from a freelensapp/freelens checkout. That script starts Electron
-with `--remoteDebuggingPort 9223`, so an agent can drive the app over the
-Chrome DevTools Protocol. How to attach Playwright MCP to it is in Freelens's
-`DEVELOPMENT.md`, "Inspecting the running dev app from an AI agent"; start
-Freelens before the session connects. Playwright MCP writes its snapshots to
-`.playwright-mcp/`, which is git-ignored. Added to a Claude Code session that
-is already running, the server is listed as connected, but its tools appear
-only in a new session.
-
-Without the MCP server, or until that new session, a script with
-`chromium.connectOverCDP("http://127.0.0.1:9223")` of `playwright`, a
-devDependency, does the same, as the integration tests do. `browser.close()`
-of such a browser closes only the connection; the app belongs to Freelens and
-keeps running.
-
-A profile of Freelens dev syncs no kubeconfig until one is added in
-"Kubeconfig Syncs" of the Kubernetes preferences, so its catalog lists none of
-the developer's clusters; `KUBECONFIG` does not change that. For the checks,
-add a kubeconfig with the test cluster alone, such as the output of
-`kubectl config view --minify --flatten --context kind-kind`. A fresh profile,
-in a `FREELENS_INTEGRATION_TESTING_DIR` under the system's temporary
-directory, can start with it already in place: the integration tests seed
-`FreelensDev/lens-user-store.json` there with
-`preferences.syncKubeconfigEntries`, whose `filePath` is absolute ("Kubeconfig
-syncs of the dev profile" in Freelens's `DEVELOPMENT.md`).
+Freelens started with `pnpm dev` from a freelensapp/freelens checkout runs
+Electron with `--remoteDebuggingPort 9223`, so an agent can drive the app over
+the Chrome DevTools Protocol, with Playwright MCP or a script using
+`chromium.connectOverCDP("http://127.0.0.1:9223")`. `browser.close()` of such a
+browser closes only the connection. A profile of Freelens dev syncs no
+kubeconfig until one is added in "Kubeconfig Syncs" of the Kubernetes
+preferences; `KUBECONFIG` does not change that. An installed Freelens can load
+the checkout as well, but has no debugging port.
 
 ### Installing the checkout
 
@@ -1039,8 +777,8 @@ syncs of the dev profile" in Freelens's `DEVELOPMENT.md`).
   iframe. Pages, menus and details of the extension live in that frame, not
   in the main page.
 - Pages of the extension have URLs like `/extension/<name>/<pageId>`, with the
-  package name's `@` dropped and `/` turned into `--`, for example
-  `/extension/freelensapp--example-extension/example`. The sidebar entries
+  package name's `@` dropped and `/` turned into `--`, here
+  `/extension/freelens-pod-file-browser/pod-files`. The sidebar entries
   navigate in `onClick`; their `href` is not the page URL. A click on an
   entry's `[data-testid="sidebar-item-…"]` element does not navigate; a DOM
   `click()` on the link inside it, `[data-testid="link-for-sidebar-item-…"]`,
@@ -1069,7 +807,7 @@ The renderer's requests to Kubernetes go through Chromium, which logs every
 response that is not a success as a console error,
 `Failed to load resource: the server responded with a status of N`, also one
 that the code that sent it handles. The text names no URL; the location of the
-message does, and the error collector of the integration tests appends it. An
+message does. An
 extension whose tests expect such a response on purpose, a 404 or a 409, leaves
 out that one error by its status and URL, not every "Failed to load resource".
 
@@ -1078,67 +816,6 @@ macOS it is `~/Library/Logs/Freelens/lens.log`, with the renderer's
 `lens-renderer-*.log` next to it; when the terminal is not at hand, it shows
 the extension's activation, its reloads and its own lines. Filter it as the
 console.
-
-## Agent Skills
-
-`skills/` holds two skills in the Agent Skills format
-(<https://agentskills.io/specification>), which extension authors install into
-their own repositories with `npx skills add` or by copying the directory. They
-are for work on other repositories, not on this one, so they are not in
-`.claude/skills/`.
-
-| Skill                           | Does                                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `create-freelens-extension`     | starts a new extension from a copy of this repository                                                     |
-| `port-freelens-extension-to-v2` | ports a v1 extension to v2, with the template of the migration issue, and #326, #327 and #336 as examples |
-
-Each `SKILL.md` carries the workflow and links to the documents it relies on:
-`api.md`, `migrating-from-v1.md` and `binaries.md` of Freelens, this file,
-`README.md`, the source tree, and the issues and pull request above. It does
-not copy them, so nothing drifts. The one exception is
-`skills/port-freelens-extension-to-v2/references/migration-issue.md`, the
-template of the migration issue, which exists nowhere else. What a skill does
-depend on is the names:
-
-- They, the template of the migration issue included, cite sections of this
-  file and of `README.md` by their headings, and files of this repository by
-  their paths. Renaming such a section, or moving
-  or removing such a file, updates the skill in the same commit.
-- `create-freelens-extension` puts every tracked file into one of its groups
-  (keep, adapt, remove, rewrite). A new tracked file goes into one of them in
-  the commit that adds it.
-- They cite sections of Freelens's `docs/extensions/` by their headings and
-  contracts by their numbers. The "Extension API" section of Freelens's
-  `AGENTS.md` lists those citations, so that a rename there updates the skill.
-  A skill that cites a section the list does not have needs the list extended
-  in freelensapp/freelens.
-- The links to freelensapp/freelens point at a release tag, `v2.0.0`, the
-  same as the pin of the template of the migration issue. The links to this
-  repository point at `main`: the template is read as it is now, not at a
-  release.
-
-The pin in "Source of truth" of the template of the migration issue, a Freelens
-release tag and the `@freelensapp/extensions` release of the same version, is
-never older than what the skills or the documents they link to require. A
-change that makes a skill rely on what a newer release brought moves the pin
-of the template and the links of the skills to that release, together with the
-versions of its "Stack alignment".
-
-The template changes by pull request, like any file here. A finding of a port
-that applies to any port is folded into the generic section it affects, and
-the template keeps no list of findings: the history is in git, and #326, the
-migration of this repository, keeps its own findings as a completed example
-that is not edited for later ports. The template is an issue body, so it keeps
-one paragraph per line: GitHub turns every newline of an issue body into a line
-break. Every mention of the Claude handle in it stays split, and every
-reference to this repository is written in full, because the body is opened in
-other repositories.
-
-The frontmatter follows the specification: `name` equal to the directory name,
-a `description` of at most 1024 characters that says what the skill does and
-when to use it, `license: MIT`, and `compatibility` naming the network access
-the links need. Keep each `SKILL.md` well under 500 lines, and add a
-`references/` file only for content that exists nowhere else.
 
 ## Code Style
 
@@ -1215,166 +892,3 @@ Code in `src/common/` is shared between both processes.
 8. **Do not use Anthropic Fable for coding tasks** — Fable may be used only for planning,
    analysis, and thinking through problems. When writing or editing code,
    use standard editing tools instead.
-
-## GitHub Actions (Claude Code Action) Rules
-
-This project has a Claude Code workflow (`.github/workflows/claude.yaml`) triggered
-via `@claude` comments on issues, PR comments, and reviews. When operating via that
-workflow, follow these rules:
-
-### Code Review
-
-When reviewing code and proposing fixes:
-
-1. **Show the diff first** — present every proposed change as a unified diff
-   block using the `diff` language tag:
-
-   ```diff
-   --- a/path/to/file.ts
-   +++ b/path/to/file.ts
-   @@ -10,7 +10,7 @@
-    const oldLine = "before";
-   -const changedLine = "after";
-   +const changedLine = "the fix";
-    const unchangedLine = "same";
-   ```
-
-   You can generate this from the terminal with:
-
-   ```bash
-   git diff -u -- path/to/file
-   ```
-
-   If the change spans multiple files, group them under a single commit
-   subject and show each file's diff sequentially.
-
-2. **Propose a commit subject first** — before any code change, output a
-   single line with the proposed commit subject:
-
-   ```text
-   **Proposed commit:** <short description>
-   ```
-
-   Do **not** use Conventional Commits prefixes (e.g. `fix:`, `feat:`,
-   `chore:`, `refactor:`, `docs:`, `test:`, `ci:`). This project prefers
-   plain, descriptive commit messages and PR titles without any prefix.
-
-   Wait for the user to confirm (or adjust) the subject before applying the
-   change.
-
-3. **Comment style:**
-   - Keep review comments concise and actionable
-   - Reference specific lines (file + line number) when pointing out issues
-   - Offer a concrete fix suggestion rather than just flagging a problem
-   - Do **not** use emoji in any Markdown, comments, commit messages, or
-     PR descriptions. The only exception is emoji that already appears
-     inside code strings (e.g. application logs, user-facing messages).
-   - Use GitHub's `suggestion` block for small targeted fixes so the PR
-     author can accept the change with a single click:
-
-     ```suggestion
-     <same unified-diff format as shown above>
-     ```
-
-   - For larger multi-file changes, use `diff -u` blocks in a regular
-     comment instead, with the proposed commit subject shown first
-
-### Making Changes to a PR
-
-When asked to implement a change on a PR:
-
-1. Propose the commit subject (as above)
-2. Describe what will change and why
-3. After confirmation, apply the changes with commits on the PR branch
-4. **One commit per fix** — when a review surfaces more than one issue or
-   the plan includes more than one fix, apply and commit each fix
-   separately. Do not batch multiple independent fixes into a single
-   commit. This keeps the history bisectable and makes each change easy
-   to revert individually.
-
-### Force-Pushing a Rewritten Branch
-
-When you are asked to rebase a pull request branch, or to rewrite its
-history in another way (amend, squash, drop a commit), push the result with:
-
-```bash
-git push --force-with-lease origin HEAD
-```
-
-The push wrapper the action names in its instructions, `git-push.sh`, accepts
-no flags, so it cannot do this; `git` itself is allowed in this workflow.
-Do not fall back to merging `main` into the branch instead: a merge commit is
-not what was asked for.
-
-Force-push only the pull request branch the run was invoked on, and only when
-the request calls for a rewrite. Never force-push `main` or any other branch,
-and never rewrite a history you were not asked to.
-
-### Modifying GitHub Actions Workflows
-
-Claude cannot push changes to files under `.github/workflows/` directly,
-because the GitHub token used by the action lacks the `workflows` permission.
-Any patch to a workflow file MUST therefore be delivered as a new, complete
-file under the `github-workflow-fix/` directory in the repository root instead
-of editing the file in place:
-
-1. Write the full, final contents of the workflow to
-   `github-workflow-fix/<workflow-file-name>`, with the same file name as in
-   `.github/workflows/` (e.g. `github-workflow-fix/check.yaml`). Do **not**
-   edit the original file under `.github/workflows/`.
-2. Make it a **complete** file — the entire workflow as it should look after
-   the change, not just a diff or fragment — so it can be copied verbatim.
-3. Commit it with the change that needs it, and list it in the report. In the
-   PR description, note it as a proposed workflow change that a maintainer
-   must move from `github-workflow-fix/` to `.github/workflows/`.
-
-A maintainer moves the file into `.github/workflows/` in a separate commit and
-removes `github-workflow-fix/`. Pull before continuing on the branch, as it may
-have gained such a commit.
-
-### Branch Naming Conventions
-
-When creating a branch from an issue, use a human-readable name that includes
-the issue number and a short slug derived from the issue title:
-
-```text
-claude/issue-<number>-<short-slug>
-```
-
-- `<number>` is the GitHub issue number
-- `<short-slug>` is a kebab-case summary of the issue title, kept short
-  (3–6 words maximum, omit articles and filler words)
-
-Do **not** use auto-generated timestamp suffixes (e.g.
-`claude/issue-1957-20260612-2108`) — these are not human-readable and make
-branch lists hard to scan.
-
-### Fork PRs: Review Only
-
-A PR from a fork (different owner than `freelensapp`) gets a review and
-nothing else: no commits, no pushes, no branches. Its code is untrusted, and
-the head of a fork PR can change between the moment a maintainer looks at it
-and the moment the workflow checks it out, so nothing taken from the checkout
-may reach `freelensapp/freelens-example-extension`.
-
-When a fork PR needs changes, a maintainer first copies the exact commit they
-reviewed to a branch in this repository. From then on it is a
-same-repository PR, which gets the full setup and the normal workflow. The
-copy is made either locally (`gh pr checkout <N>`, then push the branch) or
-by the Claude Task workflow, following "Copying a Fork PR" below.
-
-### Copying a Fork PR
-
-This applies to a Claude Task run whose prompt asks to copy a fork PR and
-names the PR number and the full commit SHA to copy. It is a git-only task:
-do not check out, read, build or run any of the PR's files, and do not
-describe its changes, because they are untrusted input.
-
-1. `git fetch origin refs/pull/<N>/head`.
-2. Verify that `FETCH_HEAD` equals the given SHA. If it does not, or no full
-   SHA was given, stop and report the actual head without pushing anything.
-3. `git push origin <sha>:refs/heads/claude/pr-<N>`.
-4. Open a PR from `claude/pr-<N>` to `main`. It MUST use the **exact same
-   title** as the original PR, copied verbatim with no prefix, and its body
-   is `Copy of #<N> at <sha>.` followed by the usual footer.
-5. Comment on the original PR with a link to the new one.
