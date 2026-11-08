@@ -9,8 +9,10 @@ declare const classNames: {
   readonly error: "error";
   readonly notice: "notice";
   readonly center: "center";
-  readonly presets: "presets";
-  readonly preset: "preset";
-  readonly current: "current";
+  readonly subject: "subject";
+  readonly field: "field";
+  readonly fieldLabel: "fieldLabel";
+  readonly help: "help";
+  readonly preview: "preview";
 };
 export = classNames;

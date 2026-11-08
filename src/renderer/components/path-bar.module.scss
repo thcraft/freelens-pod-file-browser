@@ -1,0 +1,64 @@
+@use "../vars";
+
+.bar,
+.input {
+  flex: 1;
+  min-width: 0;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 vars.$padding * 0.5;
+  border: 1px solid var(--borderFaintColor);
+  border-radius: 4px;
+  font-family: var(--font-monospace, monospace);
+  cursor: text;
+
+  &:hover,
+  &:focus-visible {
+    border-color: var(--textColorSecondary);
+
+    .editIcon {
+      opacity: 1;
+    }
+  }
+}
+
+.group {
+  display: inline-flex;
+  align-items: center;
+}
+
+.segment {
+  padding: 2px 4px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--textColorAccent);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--borderFaintColor);
+    text-decoration: underline;
+  }
+}
+
+.current {
+  color: var(--textColorPrimary);
+  font-weight: bold;
+}
+
+.separator {
+  color: var(--textColorSecondary);
+}
+
+.editIcon {
+  margin-left: auto;
+  padding-left: vars.$padding;
+  color: var(--textColorSecondary);
+  opacity: 0.4;
+}

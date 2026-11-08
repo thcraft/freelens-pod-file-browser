@@ -15,6 +15,7 @@ import { AttributesDialog, type AttributesRequest } from "./attributes-dialog";
 import styles from "./file-browser.module.scss";
 import { FileEditorDialog } from "./file-editor-dialog";
 import { type NamePrompt, NamePromptDialog } from "./name-prompt-dialog";
+import { PathBar } from "./path-bar";
 
 const { Button, Checkbox, ConfirmDialog, Icon, Input, Notifications, Spinner } = Renderer.Component;
 
@@ -57,7 +58,6 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   const [showHidden, setShowHidden] = useState(true);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ column: SortColumn; descending: boolean }>({ column: "name", descending: false });
-  const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState<string>();
   const [dragOver, setDragOver] = useState(false);
   const [prompt, setPrompt] = useState<NamePrompt>();
@@ -80,7 +80,6 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
         (result) => {
           if (!cancelled) {
             setListing(result);
-            setPathInput(result.path);
             if (selectAfterReload.current) {
               setSelected(new Set(selectAfterReload.current));
               selectAfterReload.current = undefined;
@@ -91,7 +90,6 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
           if (!cancelled) {
             setListing(undefined);
             setListingError(message(error));
-            setPathInput(path);
           }
         },
       )
@@ -143,9 +141,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const uploaded = (names: string[]) =>
-    `${names.length === 1 ? `Uploaded ${names[0]}` : `Uploaded ${names.length} files`}; ${
-      names.length === 1 ? "it is" : "they are"
-    } selected, so Permissions changes ${names.length === 1 ? "it" : "them"}.`;
+    names.length === 1 ? `Uploaded ${names[0]}` : `Uploaded ${names.length} files`;
 
   const upload = async () => {
     try {
@@ -244,7 +240,8 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     }
     const owner = shared(entries, (entry) => (entry.owner ? `${entry.owner}:${entry.group}` : undefined));
     setAttributes({
-      title: `Permissions of ${entries.length === 1 ? joinPath(currentPath, entries[0].name) : `${entries.length} items`}`,
+      subject:
+        entries.length === 1 ? joinPath(currentPath, entries[0].name) : `${entries.length} items in ${currentPath}`,
       currentMode: shared(entries, (entry) => permissionsToOctal(entry.permissions)),
       currentOwner: owner,
       hasDirectory: entries.some((entry) => entry.kind === "directory"),
@@ -344,11 +341,6 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   const sortIndicator = (column: SortColumn) =>
     sort.column === column ? <Icon small material={sort.descending ? "arrow_drop_down" : "arrow_drop_up"} /> : null;
 
-  const breadcrumbs = currentPath
-    .split("/")
-    .filter(Boolean)
-    .map((segment, index, segments) => ({ name: segment, path: `/${segments.slice(0, index + 1).join("/")}` }));
-
   return (
     <div className={`${styles.browser} ${compact ? styles.compact : ""}`}>
       <div className={styles.pathBar}>
@@ -359,26 +351,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
           onClick={() => onNavigate(parentPath(currentPath))}
         />
         <Icon material="home" interactive tooltip="Working directory" onClick={() => onNavigate("")} />
-        <div className={styles.breadcrumbs}>
-          <button type="button" className={styles.crumb} onClick={() => onNavigate("/")}>
-            /
-          </button>
-          {breadcrumbs.map((crumb) => (
-            <span key={crumb.path} className={styles.crumbGroup}>
-              <button type="button" className={styles.crumb} onClick={() => onNavigate(crumb.path)}>
-                {crumb.name}
-              </button>
-              <span className={styles.separator}>/</span>
-            </span>
-          ))}
-        </div>
-        <Input
-          className={styles.pathInput}
-          value={pathInput}
-          onChange={(value) => setPathInput(value)}
-          onSubmit={(value) => onNavigate(value.trim())}
-          placeholder="Go to path and press Enter"
-        />
+        <PathBar path={currentPath} onNavigate={onNavigate} />
         <Icon material="refresh" interactive tooltip="Reload" onClick={reload} />
       </div>
 
@@ -491,7 +464,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
                       small
                       material="lock"
                       interactive
-                      tooltip="Permissions (chmod, chown)"
+                      tooltip="Change permissions"
                       onClick={() => changeAttributes([entry])}
                     />
                     <Icon small material="edit" interactive tooltip="Rename" onClick={() => rename(entry)} />

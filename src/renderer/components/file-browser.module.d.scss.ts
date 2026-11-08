@@ -4,11 +4,6 @@ declare const classNames: {
   readonly listing: "listing";
   readonly filter: "filter";
   readonly pathBar: "pathBar";
-  readonly breadcrumbs: "breadcrumbs";
-  readonly crumbGroup: "crumbGroup";
-  readonly crumb: "crumb";
-  readonly separator: "separator";
-  readonly pathInput: "pathInput";
   readonly actions: "actions";
   readonly busy: "busy";
   readonly dropHint: "dropHint";
