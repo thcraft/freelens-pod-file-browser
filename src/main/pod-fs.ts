@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { rename, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import {
@@ -14,8 +15,14 @@ import {
   MAX_EDITABLE_FILE_SIZE,
   type PodTarget,
   parentPath,
+  type TextEncoding,
 } from "../common/protocol";
+import { decodeText, defaultEncoding, encodeText, looksBinary } from "./encoding";
 import { describeFailure, execArgs, RemoteError, runKubectl, shellCommand } from "./kubectl";
+
+const QUICK_TIMEOUT_MS = 60_000;
+// Enough to tell a binary file by its NUL bytes; most binary formats have some in their header.
+const SNIFF_SIZE = 8192;
 
 // Every script is POSIX sh that runs on BusyBox as well as on a full
 // userland. Paths reach a script only as positional parameters.
@@ -59,8 +66,28 @@ printf '%s\\n' "$s"
 head -c "$2" "$1"
 `;
 
-const WRITE_SCRIPT = `cat > "$1"`;
-export const CREATE_FILE_SCRIPT = `if [ -e "$1" ] || [ -L "$1" ]; then echo "already exists: $1" >&2; exit 5; fi; : > "$1"`;
+// $1: the file, $2: the number of bytes on stdin. The data goes to a temporary file next to the target first, and
+// replaces the content of the target only when all of it arrived: a transfer that breaks off ends stdin early, and
+// the target keeps its content. Writing into the target, rather than renaming over it, keeps its owner, mode and
+// links. A directory that takes no new file gets the data written into the target directly, checked afterwards.
+export const WRITE_SCRIPT = `
+f=$1; n=$2
+t=$(mktemp "\${f%/*}/.pod-file-browser.XXXXXX" 2>/dev/null) || t=
+if [ -z "$t" ]; then
+  cat > "$f" || exit $?
+  s=$(( $(wc -c < "$f") ))
+  [ "$s" -eq "$n" ] || { echo "the transfer broke off: $s of $n bytes were written" >&2; exit 6; }
+  exit 0
+fi
+trap 'rm -f -- "$t"' EXIT
+cat > "$t" || exit $?
+s=$(( $(wc -c < "$t") ))
+[ "$s" -eq "$n" ] || { echo "the transfer broke off: $s of $n bytes arrived; $f is unchanged" >&2; exit 6; }
+cat -- "$t" > "$f"
+`;
+// The check gives a readable message; noclobber (set -C) makes the creation itself fail on a file that appeared
+// meanwhile.
+export const CREATE_FILE_SCRIPT = `if [ -e "$1" ] || [ -L "$1" ]; then echo "already exists: $1" >&2; exit 5; fi; set -C; : > "$1"`;
 const MAKE_DIRECTORY_SCRIPT = `mkdir -- "$1"`;
 export const RENAME_SCRIPT = `if [ -e "$2" ] || [ -L "$2" ]; then echo "already exists: $2" >&2; exit 5; fi; mv -- "$1" "$2"`;
 const REMOVE_SCRIPT = `rm -rf -- "$@"`;
@@ -76,7 +103,9 @@ if [ -n "$mode" ]; then
 fi
 `;
 const CAT_SCRIPT = `cat -- "$1"`;
-export const TAR_SCRIPT = `cd -- "$1" && tar cf - "./$2"`;
+// $1: the parent directory, $2: the name. A symlink to a directory is followed (cd -P), so that the archive holds
+// the directory it points to, under that directory's own name.
+export const TAR_SCRIPT = `cd -- "$1" && cd -P -- "$2" && n=$(pwd -P) && cd .. && tar cf - "./\${n##*/}"`;
 
 const kindByCode: Record<string, FileEntryKind> = {
   f: "file",
@@ -153,8 +182,19 @@ export function parseListing(output: string, requestedPath: string): DirectoryLi
 export class PodFileSystem {
   constructor(private readonly cwd: string) {}
 
-  private async exec(target: PodTarget, script: string, args: string[], action: string) {
-    const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(script, args)), { cwd: this.cwd });
+  // Listing, reading, renaming and the like answer within seconds; a minute is a hung exec or API server. Deleting
+  // and changing a whole tree take as long as the tree needs, so they pass no timeout.
+  private async exec(
+    target: PodTarget,
+    script: string,
+    args: string[],
+    action: string,
+    timeoutMs: number | undefined = QUICK_TIMEOUT_MS,
+  ) {
+    const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(script, args)), {
+      cwd: this.cwd,
+      timeoutMs,
+    });
     if (result.code !== 0) {
       throw describeFailure(result, action);
     }
@@ -166,28 +206,61 @@ export class PodFileSystem {
     return parseListing(output.toString("utf8"), path);
   }
 
-  async readFile(target: PodTarget, path: string): Promise<FileContent> {
-    const output = await this.exec(target, READ_SCRIPT, [path, String(MAX_EDITABLE_FILE_SIZE)], `Cannot read ${path}`);
+  /** The size of the file and its first `limit` bytes. */
+  private async readStart(target: PodTarget, path: string, limit: number) {
+    const output = await this.exec(target, READ_SCRIPT, [path, String(limit)], `Cannot read ${path}`);
     const newline = output.indexOf(0x0a);
-    const size = Number(output.subarray(0, newline).toString("utf8").trim());
-    const data = output.subarray(newline + 1);
-    const binary = data.includes(0);
-
     return {
-      path,
-      size,
-      truncated: size > data.length,
-      binary,
-      content: binary ? "" : data.toString("utf8"),
+      size: Number(output.subarray(0, newline).toString("utf8").trim()),
+      data: output.subarray(newline + 1),
     };
   }
 
-  async writeFile(target: PodTarget, path: string, content: string | Uint8Array) {
-    const input = typeof content === "string" ? Buffer.from(content, "utf8") : content;
-    const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(WRITE_SCRIPT, [path]), true), {
-      cwd: this.cwd,
-      input,
+  /**
+   * The first SNIFF_SIZE bytes tell a binary file, which is then not read further unless an encoding is asked for.
+   * A text file is read up to MAX_EDITABLE_FILE_SIZE bytes, plus one to tell a file that grew since its size was read
+   * from one that fits. Without `encoding` it is decoded as UTF-8, or as UTF-16 by its byte order mark.
+   */
+  async readFile(target: PodTarget, path: string, encoding: TextEncoding | undefined): Promise<FileContent> {
+    let { size, data } = await this.readStart(target, path, SNIFF_SIZE);
+    const chosen = encoding ?? defaultEncoding(data);
+    const binaryContent = (length: number): FileContent => ({
+      path,
+      size,
+      truncated: size > length,
+      binary: true,
+      encoding: chosen,
+      lossless: false,
+      content: "",
     });
+
+    if (!encoding && looksBinary(data, chosen)) {
+      return binaryContent(data.length);
+    }
+    if (data.length >= SNIFF_SIZE || size > data.length) {
+      ({ size, data } = await this.readStart(target, path, MAX_EDITABLE_FILE_SIZE + 1));
+    }
+    const truncated = data.length > MAX_EDITABLE_FILE_SIZE || size > data.length;
+    data = data.subarray(0, MAX_EDITABLE_FILE_SIZE);
+    const binary = looksBinary(data, chosen);
+    if (!encoding && binary) {
+      return binaryContent(data.length);
+    }
+
+    const { content, lossless } = decodeText(data, chosen);
+    return { path, size, truncated, binary, encoding: chosen, lossless: lossless && !truncated && !binary, content };
+  }
+
+  async writeText(target: PodTarget, path: string, content: string, encoding: TextEncoding) {
+    await this.writeBytes(target, path, encodeText(content, encoding));
+  }
+
+  async writeBytes(target: PodTarget, path: string, data: Uint8Array) {
+    const result = await runKubectl(
+      target.clusterId,
+      execArgs(target, shellCommand(WRITE_SCRIPT, [path, String(data.byteLength)]), true),
+      { cwd: this.cwd, input: data },
+    );
     if (result.code !== 0) {
       throw describeFailure(result, `Cannot write ${path}`);
     }
@@ -200,7 +273,7 @@ export class PodFileSystem {
     }
     const result = await runKubectl(
       target.clusterId,
-      execArgs(target, shellCommand(WRITE_SCRIPT, [remotePath]), true),
+      execArgs(target, shellCommand(WRITE_SCRIPT, [remotePath, String(info.size)]), true),
       { cwd: this.cwd, input: createReadStream(localPath) },
     );
     if (result.code !== 0) {
@@ -208,43 +281,60 @@ export class PodFileSystem {
     }
   }
 
-  async downloadFile(target: PodTarget, remotePath: string, localPath: string) {
-    const output = createWriteStream(localPath);
+  /**
+   * Writes to a temporary file next to `localPath` and renames it over `localPath` once all of it is written, so
+   * that a download that fails leaves a file the user chose to replace as it was.
+   */
+  private async writeLocal(localPath: string, write: (partPath: string) => Promise<void>) {
+    const partPath = `${localPath}.${randomBytes(4).toString("hex")}.part`;
     try {
-      const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(CAT_SCRIPT, [remotePath])), {
-        cwd: this.cwd,
-        output,
-      });
-      if (result.code !== 0) {
-        throw describeFailure(result, `Cannot download ${remotePath}`);
-      }
+      await write(partPath);
+      await rename(partPath, localPath);
     } catch (error) {
-      output.destroy();
-      await rm(localPath, { force: true });
+      await rm(partPath, { force: true });
       throw error;
     }
   }
 
+  async downloadFile(target: PodTarget, remotePath: string, localPath: string) {
+    await this.writeLocal(localPath, async (partPath) => {
+      const output = createWriteStream(partPath);
+      try {
+        const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(CAT_SCRIPT, [remotePath])), {
+          cwd: this.cwd,
+          output,
+        });
+        if (result.code !== 0) {
+          throw describeFailure(result, `Cannot download ${remotePath}`);
+        }
+      } catch (error) {
+        output.destroy();
+        throw error;
+      }
+    });
+  }
+
   /** Writes the directory as a gzipped tar archive; the container needs `tar`. */
   async downloadDirectory(target: PodTarget, remotePath: string, localPath: string) {
-    const gzip = createGzip();
-    const written = pipeline(gzip, createWriteStream(localPath));
-    try {
-      const result = await runKubectl(
-        target.clusterId,
-        execArgs(target, shellCommand(TAR_SCRIPT, [parentPath(remotePath), baseName(remotePath)])),
-        { cwd: this.cwd, output: gzip },
-      );
-      if (result.code !== 0) {
-        throw describeFailure(result, `Cannot archive ${remotePath}`);
+    await this.writeLocal(localPath, async (partPath) => {
+      const gzip = createGzip();
+      const written = pipeline(gzip, createWriteStream(partPath));
+      try {
+        const result = await runKubectl(
+          target.clusterId,
+          execArgs(target, shellCommand(TAR_SCRIPT, [parentPath(remotePath), baseName(remotePath)])),
+          { cwd: this.cwd, output: gzip },
+        );
+        if (result.code !== 0) {
+          throw describeFailure(result, `Cannot archive ${remotePath}`);
+        }
+        await written;
+      } catch (error) {
+        gzip.destroy();
+        await written.catch(() => {});
+        throw error;
       }
-      await written;
-    } catch (error) {
-      gzip.destroy();
-      await written.catch(() => {});
-      await rm(localPath, { force: true });
-      throw error;
-    }
+    });
   }
 
   async createFile(target: PodTarget, path: string) {
@@ -264,7 +354,7 @@ export class PodFileSystem {
     if (unsafe !== undefined) {
       throw new RemoteError(`Refusing to delete "${unsafe}"`);
     }
-    await this.exec(target, REMOVE_SCRIPT, paths, "Cannot delete");
+    await this.exec(target, REMOVE_SCRIPT, paths, "Cannot delete", undefined);
   }
 
   async setAttributes(target: PodTarget, paths: string[], attributes: FileAttributes) {
@@ -289,6 +379,7 @@ export class PodFileSystem {
       ATTRIBUTES_SCRIPT,
       [attributes.recursive ? "1" : "0", owner, mode, ...paths],
       "Cannot change permissions",
+      undefined,
     );
   }
 }

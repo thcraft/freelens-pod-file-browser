@@ -72,7 +72,8 @@ export function PathBar({ path, onNavigate }: PathBarProps) {
       title="Click to type a path"
       onClick={startEditing}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
+        // A key on one of the segments is that button's own: it opens the segment.
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           startEditing();
         }

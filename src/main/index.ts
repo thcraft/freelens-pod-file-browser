@@ -9,17 +9,18 @@ import {
   type SaveDialogOptions,
 } from "electron";
 import {
-  baseName,
   type DownloadItem,
   type DownloadResult,
   type FileAttributes,
   IpcChannel,
   type IpcResult,
+  isTextEncoding,
   joinPath,
   type LocalFile,
   type PodTarget,
   type UploadResult,
 } from "../common/protocol";
+import { localNameFor } from "./local-names";
 import { PodFileSystem } from "./pod-fs";
 
 class PodFilesIpc extends Main.Ipc {}
@@ -59,14 +60,12 @@ async function uniqueLocalPath(directory: string, name: string) {
   return candidate;
 }
 
-function localNameFor(item: DownloadItem) {
-  const name = baseName(item.path).replace(/[<>:"\\|?*]/g, "_");
-  return item.isDirectory ? `${name === "/" ? "root" : name}.tar.gz` : name;
-}
-
 export default class PodFileBrowserMain extends Main.LensExtension {
   async onActivate() {
     const fs = new PodFileSystem(path.dirname(this.manifestPath));
+    // The local files the user chose in the upload dialog. Main uploads only those, so that the renderer cannot have
+    // it read any other file of the user's.
+    const pickedFiles = new Set<string>();
     const ipc = PodFilesIpc.createInstance(this);
 
     // Every handler answers with an IpcResult, so that the renderer gets the
@@ -89,14 +88,22 @@ export default class PodFileBrowserMain extends Main.LensExtension {
       fs.listDirectory(target, directory),
     );
 
-    handle(IpcChannel.readFile, (_event, target: PodTarget, file: string) => fs.readFile(target, file));
+    handle(IpcChannel.readFile, (_event, target: PodTarget, file: string, encoding: unknown) =>
+      fs.readFile(target, file, isTextEncoding(encoding) ? encoding : undefined),
+    );
 
-    handle(IpcChannel.writeFile, (_event, target: PodTarget, file: string, content: string) =>
-      fs.writeFile(target, file, content),
+    handle(
+      IpcChannel.writeFile,
+      async (_event, target: PodTarget, file: string, content: string, encoding: unknown) => {
+        if (!isTextEncoding(encoding)) {
+          throw new Error(`Unknown encoding ${String(encoding)}`);
+        }
+        await fs.writeText(target, file, content, encoding);
+      },
     );
 
     handle(IpcChannel.uploadData, (_event, target: PodTarget, file: string, data: Uint8Array) =>
-      fs.writeFile(target, file, data),
+      fs.writeBytes(target, file, data),
     );
 
     handle(IpcChannel.createFile, (_event, target: PodTarget, file: string) => fs.createFile(target, file));
@@ -121,14 +128,22 @@ export default class PodFileBrowserMain extends Main.LensExtension {
       if (result.canceled) {
         return [];
       }
+      for (const file of result.filePaths) {
+        pickedFiles.add(file);
+      }
       return result.filePaths.map((file) => ({ path: file, name: path.basename(file) }));
     });
 
     handle(
       IpcChannel.uploadFiles,
       async (_event, target: PodTarget, directory: string, files: string[]): Promise<UploadResult> => {
+        const unpicked = files.find((file) => !pickedFiles.has(file));
+        if (unpicked !== undefined) {
+          throw new Error(`${unpicked} was not chosen in the upload dialog`);
+        }
         const uploaded: string[] = [];
         for (const file of files) {
+          pickedFiles.delete(file);
           const remotePath = joinPath(directory, path.basename(file));
           await fs.uploadLocalFile(target, file, remotePath);
           uploaded.push(remotePath);

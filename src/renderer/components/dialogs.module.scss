@@ -96,3 +96,19 @@
   font-family: var(--font-monospace, monospace);
   word-break: break-all;
 }
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  gap: vars.$padding * 2;
+
+  .title {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.encoding {
+  width: 280px;
+  flex: none;
+}

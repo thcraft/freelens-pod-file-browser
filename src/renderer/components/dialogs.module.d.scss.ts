@@ -14,5 +14,7 @@ declare const classNames: {
   readonly fieldLabel: "fieldLabel";
   readonly help: "help";
   readonly preview: "preview";
+  readonly editorHeader: "editorHeader";
+  readonly encoding: "encoding";
 };
 export = classNames;

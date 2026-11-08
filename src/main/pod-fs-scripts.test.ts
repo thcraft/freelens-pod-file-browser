@@ -3,14 +3,23 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ATTRIBUTES_SCRIPT, CREATE_FILE_SCRIPT, LIST_SCRIPT, parseListing, READ_SCRIPT, RENAME_SCRIPT } from "./pod-fs";
+import {
+  ATTRIBUTES_SCRIPT,
+  CREATE_FILE_SCRIPT,
+  LIST_SCRIPT,
+  parseListing,
+  READ_SCRIPT,
+  RENAME_SCRIPT,
+  TAR_SCRIPT,
+  WRITE_SCRIPT,
+} from "./pod-fs";
 
 // The scripts run in the container through `sh -c`. Here they run in the
 // local POSIX shell, when there is one, with the same positional parameters.
 const hasShell = spawnSync("sh", ["-c", "exit 0"]).status === 0;
 
-function sh(script: string, args: string[]) {
-  const result = spawnSync("sh", ["-c", script, "sh", ...args]);
+function sh(script: string, args: string[], input?: string) {
+  const result = spawnSync("sh", ["-c", script, "sh", ...args], { input });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr.toString("utf8") };
 }
 
@@ -97,5 +106,53 @@ describe.skipIf(!hasShell)("the container scripts", () => {
     const result = sh(ATTRIBUTES_SCRIPT, ["0", "no-such-user-xyz", "", `${root}/big.txt`]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/no-such-user-xyz|invalid/i);
+  });
+
+  it("writes all of the data into an existing file and leaves no temporary file", () => {
+    writeFileSync(path.join(root, "target.txt"), "old content");
+    const result = sh(WRITE_SCRIPT, [`${root}/target.txt`, "11"], "new content");
+    expect(result.code).toBe(0);
+    expect(readFileSync(path.join(root, "target.txt"), "utf8")).toBe("new content");
+    expect(
+      spawnSync("sh", ["-c", `ls -A "${root}" | grep -c pod-file-browser`])
+        .stdout.toString()
+        .trim(),
+    ).toBe("0");
+  });
+
+  it("keeps the file as it was when fewer bytes arrive than announced", () => {
+    writeFileSync(path.join(root, "kept.txt"), "original");
+    const result = sh(WRITE_SCRIPT, [`${root}/kept.txt`, "100"], "partial");
+    expect(result.code).toBe(6);
+    expect(result.stderr).toContain("7 of 100 bytes");
+    expect(readFileSync(path.join(root, "kept.txt"), "utf8")).toBe("original");
+    expect(
+      spawnSync("sh", ["-c", `ls -A "${root}" | grep -c pod-file-browser`])
+        .stdout.toString()
+        .trim(),
+    ).toBe("0");
+  });
+
+  it("creates a new file", () => {
+    expect(sh(WRITE_SCRIPT, [`${root}/created.txt`, "5"], "hello").code).toBe(0);
+    expect(readFileSync(path.join(root, "created.txt"), "utf8")).toBe("hello");
+  });
+
+  it("does not create over a file that exists", () => {
+    writeFileSync(path.join(root, "existing.txt"), "keep");
+    // Without the check in front, noclobber alone refuses.
+    const noclobber = CREATE_FILE_SCRIPT.slice(CREATE_FILE_SCRIPT.indexOf("set -C"));
+    expect(sh(noclobber, [`${root}/existing.txt`]).code).not.toBe(0);
+    expect(readFileSync(path.join(root, "existing.txt"), "utf8")).toBe("keep");
+  });
+
+  // Git Bash makes copies rather than symbolic links unless Windows allows it to.
+  it.skipIf(process.platform === "win32")("archives the directory a symlink points to", () => {
+    mkdirSync(path.join(root, "real-dir"));
+    writeFileSync(path.join(root, "real-dir/inside.txt"), "x");
+    spawnSync("ln", ["-s", "real-dir", path.join(root, "link-dir")]);
+    const result = spawnSync("sh", ["-c", `${TAR_SCRIPT} | tar tf -`, "sh", root, "link-dir"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout.toString()).toContain("./real-dir/inside.txt");
   });
 });

@@ -9,6 +9,7 @@ import {
   type IpcResult,
   type LocalFile,
   type PodTarget,
+  type TextEncoding,
   type UploadResult,
 } from "../common/protocol";
 
@@ -24,9 +25,10 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 export const podFiles = {
   listDirectory: (target: PodTarget, path: string) => invoke<DirectoryListing>(IpcChannel.listDirectory, target, path),
-  readFile: (target: PodTarget, path: string) => invoke<FileContent>(IpcChannel.readFile, target, path),
-  writeFile: (target: PodTarget, path: string, content: string) =>
-    invoke<void>(IpcChannel.writeFile, target, path, content),
+  readFile: (target: PodTarget, path: string, encoding: TextEncoding | undefined) =>
+    invoke<FileContent>(IpcChannel.readFile, target, path, encoding),
+  writeFile: (target: PodTarget, path: string, content: string, encoding: TextEncoding) =>
+    invoke<void>(IpcChannel.writeFile, target, path, content, encoding),
   uploadData: (target: PodTarget, path: string, data: Uint8Array) =>
     invoke<void>(IpcChannel.uploadData, target, path, data),
   pickUploadFiles: () => invoke<LocalFile[]>(IpcChannel.pickUploadFiles),

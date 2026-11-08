@@ -49,7 +49,11 @@ function shared(entries: FileEntry[], value: (entry: FileEntry) => string | unde
 }
 
 export function FileBrowser({ target, path, onNavigate, compact = false }: FileBrowserProps) {
-  const [listing, setListing] = useState<DirectoryListing>();
+  // A listing belongs to the container and the directory it was read from. While another one loads, the old one is
+  // not shown, so that no action runs with names from one container against another.
+  const listingKey = JSON.stringify([target.clusterId, target.namespace, target.pod, target.container, path]);
+  const [loaded, setLoaded] = useState<{ key: string; listing: DirectoryListing }>();
+  const listing = loaded?.key === listingKey ? loaded.listing : undefined;
   const [listingError, setListingError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -59,6 +63,8 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ column: SortColumn; descending: boolean }>({ column: "name", descending: false });
   const [busy, setBusy] = useState<string>();
+  // Set at once, unlike the state, so that a second action started in the same tick finds it set.
+  const busyRef = useRef(false);
   const [dragOver, setDragOver] = useState(false);
   const [prompt, setPrompt] = useState<NamePrompt>();
   const [editing, setEditing] = useState<string>();
@@ -72,6 +78,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   useEffect(() => {
     setSelected(new Set());
     let cancelled = false;
+    const key = listingKey;
     setLoading(true);
     setListingError(undefined);
     podFiles
@@ -79,7 +86,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       .then(
         (result) => {
           if (!cancelled) {
-            setListing(result);
+            setLoaded({ key, listing: result });
             if (selectAfterReload.current) {
               setSelected(new Set(selectAfterReload.current));
               selectAfterReload.current = undefined;
@@ -88,7 +95,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
         },
         (error) => {
           if (!cancelled) {
-            setListing(undefined);
+            setLoaded(undefined);
             setListingError(message(error));
           }
         },
@@ -97,7 +104,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     return () => {
       cancelled = true;
     };
-  }, [target, path, reloadKey]);
+  }, [target, path, listingKey, reloadKey]);
 
   const currentPath = listing?.path ?? path;
 
@@ -109,7 +116,14 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     return sortEntries(entries, sort.column, sort.descending);
   }, [listing, showHidden, filter, sort]);
 
+  // One action at a time: every way to start one is disabled while another runs, and run() refuses a second.
+  const ready = listing !== undefined && busy === undefined;
+
   const run = async (label: string, action: () => Promise<unknown>, success?: string) => {
+    if (busyRef.current) {
+      return;
+    }
+    busyRef.current = true;
     setBusy(label);
     try {
       await action();
@@ -119,6 +133,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     } catch (error) {
       Notifications.error(message(error));
     } finally {
+      busyRef.current = false;
       setBusy(undefined);
       reload();
     }
@@ -144,6 +159,9 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     names.length === 1 ? `Uploaded ${names[0]}` : `Uploaded ${names.length} files`;
 
   const upload = async () => {
+    if (!ready) {
+      return;
+    }
     try {
       const files = await podFiles.pickUploadFiles();
       if (files.length === 0 || !(await confirmOverwrite(files.map((file) => file.name)))) {
@@ -165,7 +183,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const uploadDropped = async (files: File[]) => {
-    if (files.length === 0) {
+    if (files.length === 0 || !ready) {
       return;
     }
     const tooBig = files.find((file) => file.size > MAX_DROP_UPLOAD_SIZE);
@@ -193,7 +211,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const download = async (entries: FileEntry[]) => {
-    if (entries.length === 0) {
+    if (entries.length === 0 || !ready) {
       return;
     }
     await run("Downloading", async () => {
@@ -208,7 +226,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const remove = async (entries: FileEntry[]) => {
-    if (entries.length === 0) {
+    if (entries.length === 0 || !ready) {
       return;
     }
     const confirmed = await ConfirmDialog.confirm({
@@ -235,7 +253,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const changeAttributes = (entries: FileEntry[]) => {
-    if (entries.length === 0) {
+    if (entries.length === 0 || !ready) {
       return;
     }
     const owner = shared(entries, (entry) => (entry.owner ? `${entry.owner}:${entry.group}` : undefined));
@@ -260,6 +278,9 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const rename = (entry: FileEntry) => {
+    if (!ready) {
+      return;
+    }
     setPrompt({
       title: `Rename ${entry.name}`,
       label: "New name",
@@ -274,6 +295,9 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const createDirectory = () => {
+    if (!ready) {
+      return;
+    }
     setPrompt({
       title: `New folder in ${currentPath}`,
       label: "Folder name",
@@ -287,6 +311,9 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   };
 
   const createFile = () => {
+    if (!ready) {
+      return;
+    }
     setPrompt({
       title: `New file in ${currentPath}`,
       label: "File name",
@@ -356,26 +383,26 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       </div>
 
       <div className={styles.actions}>
-        <Button primary label="Upload" onClick={() => void upload()} disabled={!!busy} />
-        <Button plain label="New folder" onClick={createDirectory} disabled={!!busy} />
-        <Button plain label="New file" onClick={createFile} disabled={!!busy} />
+        <Button primary label="Upload" onClick={() => void upload()} disabled={!ready} />
+        <Button plain label="New folder" onClick={createDirectory} disabled={!ready} />
+        <Button plain label="New file" onClick={createFile} disabled={!ready} />
         <Button
           plain
           label={`Download${count}`}
           onClick={() => void download(selectedEntries)}
-          disabled={!!busy || selectedEntries.length === 0}
+          disabled={!ready || selectedEntries.length === 0}
         />
         <Button
           plain
           label={`Permissions${count}`}
           onClick={() => changeAttributes(selectedEntries)}
-          disabled={!!busy || selectedEntries.length === 0}
+          disabled={!ready || selectedEntries.length === 0}
         />
         <Button
           plain
           label={`Delete${count}`}
           onClick={() => void remove(selectedEntries)}
-          disabled={!!busy || selectedEntries.length === 0}
+          disabled={!ready || selectedEntries.length === 0}
         />
         <Checkbox label="Hidden files" value={showHidden} onChange={(value) => setShowHidden(value)} />
         <Input className={styles.filter} value={filter} onChange={(value) => setFilter(value)} placeholder="Filter" />
@@ -389,7 +416,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       <div
         className={`${styles.listing} ${dragOver ? styles.dragOver : ""}`}
         onDragOver={(event) => {
-          if (event.dataTransfer.types.includes("Files")) {
+          if (ready && event.dataTransfer.types.includes("Files")) {
             event.preventDefault();
             setDragOver(true);
           }
@@ -409,6 +436,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
                 <th className={styles.checkColumn}>
                   <input
                     type="checkbox"
+                    aria-label="Select all"
                     checked={allSelected}
                     onChange={() =>
                       setSelected(allSelected ? new Set() : new Set(visibleEntries.map((entry) => entry.name)))
@@ -439,7 +467,12 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
                   onDoubleClick={() => open(entry)}
                 >
                   <td className={styles.checkColumn}>
-                    <input type="checkbox" checked={selected.has(entry.name)} onChange={() => toggle(entry.name)} />
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${entry.name}`}
+                      checked={selected.has(entry.name)}
+                      onChange={() => toggle(entry.name)}
+                    />
                   </td>
                   <td className={styles.name} title={compact ? formatTime(entry.modified) : undefined}>
                     <Icon small material={entryIcon(entry)} />
@@ -457,6 +490,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
                       small
                       material="download"
                       interactive
+                      disabled={!ready}
                       tooltip="Download"
                       onClick={() => void download([entry])}
                     />
@@ -464,11 +498,26 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
                       small
                       material="lock"
                       interactive
+                      disabled={!ready}
                       tooltip="Change permissions"
                       onClick={() => changeAttributes([entry])}
                     />
-                    <Icon small material="edit" interactive tooltip="Rename" onClick={() => rename(entry)} />
-                    <Icon small material="delete" interactive tooltip="Delete" onClick={() => void remove([entry])} />
+                    <Icon
+                      small
+                      material="edit"
+                      interactive
+                      disabled={!ready}
+                      tooltip="Rename"
+                      onClick={() => rename(entry)}
+                    />
+                    <Icon
+                      small
+                      material="delete"
+                      interactive
+                      disabled={!ready}
+                      tooltip="Delete"
+                      onClick={() => void remove([entry])}
+                    />
                   </td>
                 </tr>
               ))}

@@ -50,11 +50,44 @@ export interface DirectoryListing {
   hasDetails: boolean;
 }
 
+/** The text encodings the editor offers, by their iconv-lite names. */
+export const TEXT_ENCODINGS = [
+  { id: "utf8", label: "UTF-8" },
+  { id: "windows1250", label: "Windows-1250 (Central European)" },
+  { id: "iso88592", label: "ISO-8859-2 (Latin-2)" },
+  { id: "cp852", label: "CP852 (DOS Central European)" },
+  { id: "windows1252", label: "Windows-1252 (Western)" },
+  { id: "iso88591", label: "ISO-8859-1 (Latin-1)" },
+  { id: "iso885915", label: "ISO-8859-15 (Latin-9)" },
+  { id: "windows1251", label: "Windows-1251 (Cyrillic)" },
+  { id: "koi8r", label: "KOI8-R" },
+  { id: "utf16le", label: "UTF-16 LE" },
+  { id: "utf16be", label: "UTF-16 BE" },
+] as const;
+
+export type TextEncoding = (typeof TEXT_ENCODINGS)[number]["id"];
+
+export function isTextEncoding(value: unknown): value is TextEncoding {
+  return TEXT_ENCODINGS.some((encoding) => encoding.id === value);
+}
+
 export interface FileContent {
   path: string;
   size: number;
+  /** The file is larger than what was read; the editor shows it read only. */
   truncated: boolean;
+  /**
+   * The file has NUL bytes and is not UTF-16. It is never editable; its content is read and shown only when an
+   * encoding was asked for, so that opening a large binary file by mistake reads no more than its first bytes.
+   */
   binary: boolean;
+  /** The encoding the content was decoded with: the one asked for, or UTF-8 (UTF-16 with its byte order mark). */
+  encoding: TextEncoding;
+  /**
+   * The content encodes back to exactly the bytes read. When it does not, saving would change bytes the user did not
+   * edit, so the editor shows the file read only.
+   */
+  lossless: boolean;
   content: string;
 }
 
