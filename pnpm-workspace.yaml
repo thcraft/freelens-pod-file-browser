@@ -13,8 +13,6 @@ engineStrict: true
 # policy: the exclusion is then a no-op.
 minimumReleaseAgeExclude:
   - '@freelensapp/extensions'
-  # Node 24.22.1, the fix of CVE-2026-111497.
-  - electron@44.10.0
 
 shellEmulator: true
 
@@ -22,3 +20,16 @@ shellEmulator: true
 # extension shares with the host is outside the peer range of
 # @freelensapp/extensions.
 strictPeerDependencies: true
+
+# Security fixes in dependencies of the development tools; none of them is
+# bundled into the extension. Remove an entry once the package that pulls it
+# in depends on the fixed version itself.
+overrides:
+  # monaco-editor pins dompurify 3.4.15 (GHSA-cg2g-xh64-v4q7 and others). The
+  # extension compiles against monaco-editor for its types only; Freelens
+  # ships the editor and overrides dompurify the same way.
+  monaco-editor>dompurify: 3.4.17
+  # @electron/get downloads Electron during pnpm install with undici.
+  undici@<7.30.1: 7.30.2
+  # ajv of conf, which @freelensapp/extensions depends on for its types.
+  fast-uri@<3.1.9: 3.1.9

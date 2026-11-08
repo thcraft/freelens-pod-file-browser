@@ -42,7 +42,9 @@ the catalog rule: `matchManagers: ["npm"]`, the override's key in
 package in `overridePackageName`, and the catalog rule's `rangeStrategy`,
 `minimumReleaseAge` and `groupName`
 (freelensapp/freelens-for-claude-extension@f2f49241828f201890423e070655c2dc04120b23).
-This repository has no override. What Freelens does not define (GitHub Actions, the
+The overrides of this repository are security fixes of the development tools
+(`pnpm-workspace.yaml`), not copied from Freelens; Renovate looks them up on
+npm. What Freelens does not define (GitHub Actions, the
 tool versions in the workflows, `shx`) Renovate updates as usual.
 pnpm is the exception: Renovate updates it from the npm registry, in a pull
 request of its own, and not to the version of Freelens's `packageManager`.
