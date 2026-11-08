@@ -3,11 +3,11 @@ import {
   type DirectoryListing,
   type DownloadItem,
   type DownloadResult,
+  type FileAttributes,
   type FileContent,
   IpcChannel,
   type IpcResult,
   type LocalFile,
-  type PodInfo,
   type PodTarget,
   type UploadResult,
 } from "../common/protocol";
@@ -23,7 +23,6 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 export const podFiles = {
-  listPods: (clusterId: string, namespace: string) => invoke<PodInfo[]>(IpcChannel.listPods, clusterId, namespace),
   listDirectory: (target: PodTarget, path: string) => invoke<DirectoryListing>(IpcChannel.listDirectory, target, path),
   readFile: (target: PodTarget, path: string) => invoke<FileContent>(IpcChannel.readFile, target, path),
   writeFile: (target: PodTarget, path: string, content: string) =>
@@ -38,4 +37,6 @@ export const podFiles = {
   makeDirectory: (target: PodTarget, path: string) => invoke<void>(IpcChannel.makeDirectory, target, path),
   rename: (target: PodTarget, from: string, to: string) => invoke<void>(IpcChannel.rename, target, from, to),
   remove: (target: PodTarget, paths: string[]) => invoke<void>(IpcChannel.remove, target, paths),
+  setAttributes: (target: PodTarget, paths: string[], attributes: FileAttributes) =>
+    invoke<void>(IpcChannel.setAttributes, target, paths, attributes),
 };

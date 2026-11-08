@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CREATE_FILE_SCRIPT, LIST_SCRIPT, parseListing, READ_SCRIPT, RENAME_SCRIPT } from "./pod-fs";
+import { ATTRIBUTES_SCRIPT, CREATE_FILE_SCRIPT, LIST_SCRIPT, parseListing, READ_SCRIPT, RENAME_SCRIPT } from "./pod-fs";
 
 // The scripts run in the container through `sh -c`. Here they run in the
 // local POSIX shell, when there is one, with the same positional parameters.
@@ -76,5 +76,26 @@ describe.skipIf(!hasShell)("the container scripts", () => {
     expect(readFileSync(path.join(root, "big.txt"), "utf8")).toBe("x".repeat(100));
     expect(sh(RENAME_SCRIPT, [`${root}/new.txt`, `${root}/renamed.txt`]).code).toBe(0);
     expect(readFileSync(path.join(root, "renamed.txt"), "utf8")).toBe("");
+  });
+
+  // The POSIX shells of Windows, such as Git Bash, keep no mode bits on NTFS.
+  it.skipIf(process.platform === "win32")("changes the mode of the given paths, recursively when asked", () => {
+    mkdirSync(path.join(root, "tree/sub"), { recursive: true });
+    writeFileSync(path.join(root, "tree/sub/file"), "");
+    const mode = (file: string) =>
+      spawnSync("stat", ["-c", "%a", `${root}/${file}`])
+        .stdout.toString("utf8")
+        .trim();
+
+    expect(sh(ATTRIBUTES_SCRIPT, ["0", "", "700", `${root}/tree`]).code).toBe(0);
+    expect(mode("tree")).toBe("700");
+    expect(sh(ATTRIBUTES_SCRIPT, ["1", "", "u=rwx,go=rx", `${root}/tree`]).code).toBe(0);
+    expect(mode("tree/sub")).toBe("755");
+  });
+
+  it("fails with the message of chown", () => {
+    const result = sh(ATTRIBUTES_SCRIPT, ["0", "no-such-user-xyz", "", `${root}/big.txt`]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/no-such-user-xyz|invalid/i);
   });
 });

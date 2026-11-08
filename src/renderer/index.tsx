@@ -1,5 +1,10 @@
 import { Renderer } from "@freelensapp/extensions";
-import { withMenuItemErrorBoundary, withPageErrorBoundary } from "./components/error-boundary";
+import {
+  withDetailsErrorBoundary,
+  withMenuItemErrorBoundary,
+  withPageErrorBoundary,
+} from "./components/error-boundary";
+import { PodFilesDetails } from "./details/pod-files-details";
 import { PodFilesIcon } from "./icons";
 import { PodFilesIpc } from "./ipc";
 import { PodFilesMenuItem } from "./menus/pod-files-menu-item";
@@ -32,6 +37,14 @@ export default class PodFileBrowserRenderer extends Renderer.LensExtension {
       },
     },
   ];
+
+  // After the host's own sections of the pod details: the host orders them by 300 - priority.
+  kubeObjectDetailItems: Renderer.LensExtension["kubeObjectDetailItems"] = [
+    Renderer.K8sApi.detailsFor(Renderer.K8sApi.Pod, {
+      priority: 10,
+      Details: (props) => <PodFilesDetails {...props} extension={this} />,
+    }),
+  ].map((registration) => withDetailsErrorBoundary(this, registration));
 
   kubeObjectMenuItems: Renderer.LensExtension["kubeObjectMenuItems"] = [
     Renderer.K8sApi.menuItemFor(Renderer.K8sApi.Pod, {

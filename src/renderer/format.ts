@@ -55,3 +55,23 @@ export function editorLanguageFor(path: string): "yaml" | "json" | undefined {
   }
   return undefined;
 }
+
+/**
+ * The octal mode of an `ls -l` style permission string, such as "755" for "drwxr-xr-x" or "2755" for
+ * "-rwxr-sr-x"; undefined when the string is not one.
+ */
+export function permissionsToOctal(permissions: string | undefined): string | undefined {
+  if (!permissions || !/^.[-r][-w][-xsS][-r][-w][-xsS][-r][-w][-xtT]$/.test(permissions)) {
+    return undefined;
+  }
+  const digit = (offset: number) =>
+    (permissions[offset] === "r" ? 4 : 0) +
+    (permissions[offset + 1] === "w" ? 2 : 0) +
+    (/[xst]/.test(permissions[offset + 2]) ? 1 : 0);
+  const special =
+    (/[sS]/.test(permissions[3]) ? 4 : 0) +
+    (/[sS]/.test(permissions[6]) ? 2 : 0) +
+    (/[tT]/.test(permissions[9]) ? 1 : 0);
+  const mode = `${digit(1)}${digit(4)}${digit(7)}`;
+  return special ? `${special}${mode}` : mode;
+}

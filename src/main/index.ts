@@ -12,6 +12,7 @@ import {
   baseName,
   type DownloadItem,
   type DownloadResult,
+  type FileAttributes,
   IpcChannel,
   type IpcResult,
   joinPath,
@@ -84,8 +85,6 @@ export default class PodFileBrowserMain extends Main.LensExtension {
       });
     };
 
-    handle(IpcChannel.listPods, (_event, clusterId: string, namespace: string) => fs.listPods(clusterId, namespace));
-
     handle(IpcChannel.listDirectory, (_event, target: PodTarget, directory: string) =>
       fs.listDirectory(target, directory),
     );
@@ -109,6 +108,10 @@ export default class PodFileBrowserMain extends Main.LensExtension {
     handle(IpcChannel.rename, (_event, target: PodTarget, from: string, to: string) => fs.rename(target, from, to));
 
     handle(IpcChannel.remove, (_event, target: PodTarget, paths: string[]) => fs.remove(target, paths));
+
+    handle(IpcChannel.setAttributes, (_event, target: PodTarget, paths: string[], attributes: FileAttributes) =>
+      fs.setAttributes(target, paths, attributes),
+    );
 
     handle(IpcChannel.pickUploadFiles, async (event): Promise<LocalFile[]> => {
       const result = await showOpenDialog(event, {

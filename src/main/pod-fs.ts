@@ -5,11 +5,13 @@ import { createGzip } from "node:zlib";
 import {
   baseName,
   type DirectoryListing,
+  type FileAttributes,
   type FileContent,
   type FileEntry,
   type FileEntryKind,
+  isValidMode,
+  isValidOwner,
   MAX_EDITABLE_FILE_SIZE,
-  type PodInfo,
   type PodTarget,
   parentPath,
 } from "../common/protocol";
@@ -62,6 +64,17 @@ export const CREATE_FILE_SCRIPT = `if [ -e "$1" ] || [ -L "$1" ]; then echo "alr
 const MAKE_DIRECTORY_SCRIPT = `mkdir -- "$1"`;
 export const RENAME_SCRIPT = `if [ -e "$2" ] || [ -L "$2" ]; then echo "already exists: $2" >&2; exit 5; fi; mv -- "$1" "$2"`;
 const REMOVE_SCRIPT = `rm -rf -- "$@"`;
+// $1: 1 for recursive, $2: owner (or empty), $3: mode (or empty), then the paths.
+// The owner goes first, because chown may clear the set-id bits that chmod sets.
+export const ATTRIBUTES_SCRIPT = `
+r=$1; owner=$2; mode=$3; shift 3
+if [ -n "$owner" ]; then
+  if [ "$r" = 1 ]; then chown -R "$owner" "$@" || exit $?; else chown "$owner" "$@" || exit $?; fi
+fi
+if [ -n "$mode" ]; then
+  if [ "$r" = 1 ]; then chmod -R "$mode" "$@"; else chmod "$mode" "$@"; fi
+fi
+`;
 const CAT_SCRIPT = `cat -- "$1"`;
 export const TAR_SCRIPT = `cd -- "$1" && tar cf - "./$2"`;
 
@@ -137,23 +150,6 @@ export function parseListing(output: string, requestedPath: string): DirectoryLi
   return { path, entries: [...entries.values()], hasDetails };
 }
 
-interface KubePodList {
-  items?: Array<{
-    metadata?: { name?: string };
-    spec?: {
-      containers?: Array<{ name: string }>;
-      initContainers?: Array<{ name: string }>;
-      ephemeralContainers?: Array<{ name: string }>;
-    };
-    status?: {
-      phase?: string;
-      containerStatuses?: Array<{ name: string; state?: { running?: unknown } }>;
-      initContainerStatuses?: Array<{ name: string; state?: { running?: unknown } }>;
-      ephemeralContainerStatuses?: Array<{ name: string; state?: { running?: unknown } }>;
-    };
-  }>;
-}
-
 export class PodFileSystem {
   constructor(private readonly cwd: string) {}
 
@@ -163,38 +159,6 @@ export class PodFileSystem {
       throw describeFailure(result, action);
     }
     return result.stdout;
-  }
-
-  async listPods(clusterId: string, namespace: string): Promise<PodInfo[]> {
-    const result = await runKubectl(clusterId, ["get", "pods", "--namespace", namespace, "--output", "json"], {
-      cwd: this.cwd,
-    });
-    if (result.code !== 0) {
-      throw describeFailure(result, `Cannot list pods in ${namespace}`);
-    }
-    const list = JSON.parse(result.stdout.toString("utf8")) as KubePodList;
-
-    return (list.items ?? []).map((item) => {
-      const statuses = [
-        ...(item.status?.containerStatuses ?? []),
-        ...(item.status?.initContainerStatuses ?? []),
-        ...(item.status?.ephemeralContainerStatuses ?? []),
-      ];
-      const isRunning = (name: string) => statuses.some((s) => s.name === name && s.state?.running !== undefined);
-      return {
-        name: item.metadata?.name ?? "",
-        phase: item.status?.phase ?? "Unknown",
-        containers: [
-          ...(item.spec?.containers ?? []).map((c) => ({ name: c.name, running: isRunning(c.name), init: false })),
-          ...(item.spec?.ephemeralContainers ?? []).map((c) => ({
-            name: c.name,
-            running: isRunning(c.name),
-            init: false,
-          })),
-          ...(item.spec?.initContainers ?? []).map((c) => ({ name: c.name, running: isRunning(c.name), init: true })),
-        ],
-      };
-    });
   }
 
   async listDirectory(target: PodTarget, path: string): Promise<DirectoryListing> {
@@ -301,5 +265,30 @@ export class PodFileSystem {
       throw new RemoteError(`Refusing to delete "${unsafe}"`);
     }
     await this.exec(target, REMOVE_SCRIPT, paths, "Cannot delete");
+  }
+
+  async setAttributes(target: PodTarget, paths: string[], attributes: FileAttributes) {
+    const mode = attributes.mode?.trim() ?? "";
+    const owner = attributes.owner?.trim() ?? "";
+    if (mode === "" && owner === "") {
+      return;
+    }
+    if (mode !== "" && !isValidMode(mode)) {
+      throw new RemoteError(`Invalid mode "${mode}"`);
+    }
+    if (owner !== "" && !isValidOwner(owner)) {
+      throw new RemoteError(`Invalid owner "${owner}"`);
+    }
+    // The paths are absolute, so none of them can be taken for an option.
+    const relative = paths.find((path) => !path.startsWith("/"));
+    if (relative !== undefined || paths.length === 0) {
+      throw new RemoteError(`Refusing to change "${relative ?? ""}"`);
+    }
+    await this.exec(
+      target,
+      ATTRIBUTES_SCRIPT,
+      [attributes.recursive ? "1" : "0", owner, mode, ...paths],
+      "Cannot change permissions",
+    );
   }
 }

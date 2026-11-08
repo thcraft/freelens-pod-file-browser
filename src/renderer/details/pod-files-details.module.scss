@@ -1,0 +1,39 @@
+@use "../vars";
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding * 1.5;
+  color: var(--textColorPrimary);
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: vars.$padding;
+}
+
+.closed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: vars.$padding * 2;
+}
+
+.container {
+  display: flex;
+  align-items: center;
+  gap: vars.$padding;
+
+  > span {
+    color: var(--textColorSecondary);
+  }
+
+  > div {
+    flex: 1;
+  }
+}
+
+.notice {
+  color: var(--textColorSecondary);
+}

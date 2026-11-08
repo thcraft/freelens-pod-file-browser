@@ -1,5 +1,4 @@
 export const IpcChannel = {
-  listPods: "list-pods",
   listDirectory: "list-directory",
   readFile: "read-file",
   writeFile: "write-file",
@@ -11,6 +10,7 @@ export const IpcChannel = {
   createFile: "create-file",
   rename: "rename",
   remove: "remove",
+  setAttributes: "set-attributes",
 } as const;
 
 export interface PodTarget {
@@ -24,12 +24,6 @@ export interface PodContainerInfo {
   name: string;
   running: boolean;
   init: boolean;
-}
-
-export interface PodInfo {
-  name: string;
-  phase: string;
-  containers: PodContainerInfo[];
 }
 
 export type FileEntryKind = "file" | "directory" | "symlink" | "other";
@@ -76,6 +70,30 @@ export interface DownloadResult {
 
 export interface UploadResult {
   uploaded: string[];
+}
+
+export interface FileAttributes {
+  /** An octal mode such as 644 or 2755, or a symbolic one such as u+x,g-w. */
+  mode?: string;
+  /** user, user:group or :group, by name or numeric id. */
+  owner?: string;
+  recursive: boolean;
+}
+
+const OCTAL_MODE = /^[0-7]{3,4}$/;
+const SYMBOLIC_CLAUSE = "[ugoa]*([-+=][rwxXst]*)+";
+const SYMBOLIC_MODE = new RegExp(`^${SYMBOLIC_CLAUSE}(,${SYMBOLIC_CLAUSE})*$`);
+const OWNER_NAME = "[A-Za-z0-9._][A-Za-z0-9._-]*";
+const OWNER = new RegExp(`^(${OWNER_NAME}(:(${OWNER_NAME})?)?|:${OWNER_NAME})$`);
+
+/** A mode chmod takes; never one that starts with "-", which chmod would read as an option. */
+export function isValidMode(mode: string): boolean {
+  return OCTAL_MODE.test(mode) || (SYMBOLIC_MODE.test(mode) && !mode.startsWith("-"));
+}
+
+/** user, user:group, user: or :group; never one that starts with "-". */
+export function isValidOwner(owner: string): boolean {
+  return OWNER.test(owner);
 }
 
 /** A file on the user's machine, picked in the main process's open dialog. */
