@@ -1,0 +1,68 @@
+@use "../vars";
+
+.dialog {
+  :global(.box) {
+    max-width: 90vw;
+  }
+}
+
+.promptBody,
+.editorBody {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding * 1.5;
+  padding: vars.$padding * 3;
+  background: var(--dialogBackground, var(--contentColor));
+  color: var(--textColorPrimary);
+  border-radius: 4px;
+}
+
+.promptBody {
+  width: 420px;
+}
+
+.editorBody {
+  width: min(1100px, 85vw);
+  height: 80vh;
+}
+
+.title {
+  margin: 0;
+  font-weight: bold;
+  word-break: break-all;
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding;
+}
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--borderFaintColor);
+}
+
+.buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: vars.$padding;
+}
+
+.error {
+  color: var(--colorError);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notice {
+  color: var(--textColorSecondary);
+}
+
+.center {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
