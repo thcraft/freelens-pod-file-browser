@@ -3,6 +3,13 @@
 The release workflow copies the section of the released version into the GitHub release notes.
 Add a section `## <version> (<date>)` and set the same version in `package.json` before tagging `v<version>`.
 
+## 0.5.1 (2026-11-09)
+
+- **Dialog titles show in the light theme.** The title of the editor, of Permissions and of the name prompts took the
+  white colour that Freelens gives headings, and was invisible on the white dialog.
+- **"1 item"** instead of "1 items" under a listing.
+- **Screenshots in the README**, taken of demo pods in a local cluster.
+
 ## 0.5.0 (2026-11-09)
 
 - **Tabs.** The "Pod Files" page opens as many tabs as you need, each with its own namespace, pod, container and

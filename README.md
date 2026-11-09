@@ -5,6 +5,8 @@
 download and upload files, edit text files and change their permissions, without typing `kubectl cp` or
 `kubectl exec`.
 
+![Pod Files with a tab per pod and two files selected](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/tabs.png)
+
 ## Why
 
 Freelens shows pods, logs and a shell, but getting a file in or out of a container still means a terminal:
@@ -36,6 +38,22 @@ folders, and drag files in or save them out.
   shows a system notification, once per version; click it and Freelens installs the new version after you confirm it.
   Turn it off in the Freelens preferences of the extension (_Pod File Browser updates_), where you also see the
   installed and the newest version, check right away and install it.
+
+## Screenshots
+
+Text files in other encodings open read only until you pick theirs, here a report in Windows-1250:
+
+![The editor with a Windows-1250 file](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/editor.png)
+
+Permissions and owner of the selected items, with the commands they run:
+
+![Change permissions](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/permissions.png)
+
+"Browse files" in the menu of a pod opens it in a tab of Pod Files:
+
+![Browse files in the pod menu](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/menu.png)
+
+The screenshots show demo pods in a local minikube cluster.
 
 ## Requirements
 

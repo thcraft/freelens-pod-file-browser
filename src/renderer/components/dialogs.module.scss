@@ -28,6 +28,8 @@
 
 .title {
   margin: 0;
+  // The host colours headings for its own dark header bars; in the light theme an h5 would be white on white.
+  color: inherit;
   font-weight: bold;
   word-break: break-all;
 }

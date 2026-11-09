@@ -559,7 +559,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
 
       <div className={styles.status}>
         {listing
-          ? `${listing.entries.length} items${listing.hasDetails ? "" : " - the container has no stat, sizes and times are not shown"}`
+          ? `${listing.entries.length} ${listing.entries.length === 1 ? "item" : "items"}${listing.hasDetails ? "" : " - the container has no stat, sizes and times are not shown"}`
           : ""}
       </div>
 

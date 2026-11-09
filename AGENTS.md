@@ -164,6 +164,7 @@ src/
   renderer/icons/                 # The sidebar icon
   renderer/preferences/           # The update setting and status in Preferences > Extensions
 test/freelens-extensions.ts       # Runtime stub of @freelensapp/extensions for Vitest
+screenshots/                      # README screenshots, of demo pods in a local cluster
 environment-tests/               # Probes for the per-environment programs
 build/                           # Vite plugins: host modules, standard decorators, CSS module declarations
 ```
