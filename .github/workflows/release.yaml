@@ -111,7 +111,7 @@ jobs:
             echo "${NAME}@${VERSION} is on npm already"
             exit 0
           fi
-          npm publish "release/${TARBALL}" --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/
+          npm publish "./release/${TARBALL}" --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/
 
       - name: Create release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
