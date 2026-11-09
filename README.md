@@ -41,9 +41,9 @@ folders, and drag files in or save them out.
 
 ## Screenshots
 
-Text files in other encodings open read only until you pick theirs, here a report in Windows-1250:
+Text files in other encodings open read only until you pick theirs, here a report in Windows-1252:
 
-![The editor with a Windows-1250 file](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/editor.png)
+![The editor with a Windows-1252 file](https://raw.githubusercontent.com/thcraft/freelens-pod-file-browser/main/screenshots/editor.png)
 
 Permissions and owner of the selected items, with the commands they run:
 
