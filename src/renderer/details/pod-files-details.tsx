@@ -2,7 +2,7 @@ import { Renderer } from "@freelensapp/extensions";
 import { observer } from "mobx-react";
 import { useEffect, useMemo, useState } from "react";
 import { FileBrowser } from "../components/file-browser";
-import { podFilesPageId } from "../pages/pod-files-page";
+import { podFilesPageId, podFilesPageValues } from "../pages/pod-files-page";
 import { containerLabel, defaultContainer, podContainers } from "../pod-containers";
 import styles from "./pod-files-details.module.scss";
 
@@ -47,7 +47,10 @@ export const PodFilesDetails = observer(({ object, extension }: PodFilesDetailsP
   );
 
   const openPage = () =>
-    void extension.navigate(podFilesPageId, { namespace, pod: podName, container: selectedContainer, path });
+    void extension.navigate(
+      podFilesPageId,
+      podFilesPageValues({ namespace, pod: podName, container: selectedContainer, path }),
+    );
 
   return (
     <div className={styles.details}>

@@ -1,5 +1,5 @@
 import { type Common, Renderer } from "@freelensapp/extensions";
-import { podFilesPageId } from "../pages/pod-files-page";
+import { podFilesPageId, podFilesPageValues } from "../pages/pod-files-page";
 
 const { Icon, MenuItem } = Renderer.Component;
 
@@ -17,12 +17,10 @@ export function PodFilesMenuItem({ object, toolbar, extension }: PodFilesMenuIte
   const container = containers[0]?.name ?? object.getContainers()[0]?.name ?? "";
 
   const open = () =>
-    extension.navigate(podFilesPageId, {
-      namespace: object.getNs() ?? "",
-      pod: object.getName(),
-      container,
-      path: "",
-    });
+    extension.navigate(
+      podFilesPageId,
+      podFilesPageValues({ namespace: object.getNs() ?? "", pod: object.getName(), container, path: "" }),
+    );
 
   return (
     <MenuItem onClick={() => void open()}>

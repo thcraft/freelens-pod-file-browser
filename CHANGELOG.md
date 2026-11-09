@@ -6,9 +6,10 @@ Add a section `## <version> (<date>)` and set the same version in `package.json`
 ## 0.5.0 (2026-11-09)
 
 - **Tabs.** The "Pod Files" page opens as many tabs as you need, each with its own namespace, pod, container and
-  folder: `+` opens a new tab in the namespace of the active one, the cross on a tab closes it. A tab in the background
-  keeps its listing, selection and a running download. The tabs are kept in the URL, so Back and Forward work as before;
-  "Browse files" in the pod menu and the pod details open the page with one tab for that pod.
+  folder: `+` opens a new tab in the namespace of the active one, the cross on a tab closes it (the last one leaves an
+  empty tab). A tab in the background keeps its listing, selection and a running download. "Browse files" in the pod
+  menu and the pod details open the pod in a new tab, or switch to the tab that shows it already, and the page opened
+  from the sidebar shows the tabs it last had. The tabs are kept in the URL, so Back and Forward work as before.
 - **Download progress stays in its tab.** Each browser shows the progress of its own download only.
 
 ## 0.4.1 (2026-11-09)

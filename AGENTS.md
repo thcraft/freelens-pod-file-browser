@@ -277,11 +277,13 @@ shows the status that main reports over IPC (`update-status`,
   `ready` is false.
 - The page shows tabs (`PodTab`) in the host's `Tabs`, each a namespace, pod and container picker with a
   `FileBrowser`. Every tab stays mounted and the inactive ones are hidden, so that a tab keeps its listing, selection
-  and a running action. The first tab keeps its namespace, pod, container and path in `PageParam`s of their own,
-  which "Browse files" and the pod details open with a single tab; its id is in `first`, the other tabs are a JSON
-  array in `tabs`, and `tab` is the id of the active one. The ids are React keys, so closing a tab does not remount
-  the others. Main broadcasts the progress of a download to every frame with the id that the browser gave it, and a
-  browser shows only its own.
+  and a running action. The first tab keeps its namespace, pod, container and path in `PageParam`s of their own; its
+  id is in `first`, the other tabs are a JSON array in `tabs`, and `tab` is the id of the active one. The ids are
+  React keys, so closing a tab does not remount the others. The page remembers its params per cluster frame
+  (`lastValues`): "Browse files" in the pod menu and the pod details navigate with `podFilesPageValues()`, which adds
+  a tab to them or activates the one that shows the pod, and the page opened without params, from the sidebar,
+  restores them with `replaceHistory`, so that Back does not lead to the empty page. Main broadcasts the progress of
+  a download to every frame with the id that the browser gave it, and a browser shows only its own.
 - The host keeps the `PageParam`s of a page for the life of the frame, keyed by extension and page id
   (`extension-page-parameters.injectable.ts` of Freelens), so after the extension is updated in place, from npm or by
   a rebuild, the page still gets the params of the version that loaded first. A param added in a later version is
