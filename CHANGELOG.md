@@ -3,6 +3,15 @@
 The release workflow copies the section of the released version into the GitHub release notes.
 Add a section `## <version> (<date>)` and set the same version in `package.json` before tagging `v<version>`.
 
+## 0.4.1 (2026-11-09)
+
+- **Large downloads no longer fail.** A file now downloads in chunks of 8 MiB, each checked and read again when its
+  transfer breaks off, with the progress shown next to the toolbar. A proxy in front of the Kubernetes API server could
+  cut one long transfer, and kubectl failed with "error reading from error stream: read message".
+- **A cluster whose proxy breaks kubectl exec over WebSockets switches to SPDY.** When a transfer breaks off that way,
+  it is repeated with the older SPDY transport, and that cluster keeps using it; this also helps uploads, folder
+  downloads and the editor.
+
 ## 0.4.0 (2026-11-09)
 
 - **Published on npm** as `@thcraft/freelens-pod-file-browser`: install it in Freelens by its name, or with the link

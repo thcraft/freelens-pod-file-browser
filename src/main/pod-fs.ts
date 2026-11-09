@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { rename, rm, stat } from "node:fs/promises";
+import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
+import { open, rename, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import {
@@ -18,7 +18,18 @@ import {
   type TextEncoding,
 } from "../common/protocol";
 import { decodeText, defaultEncoding, encodeText, looksBinary } from "./encoding";
-import { describeFailure, execArgs, RemoteError, runKubectl, shellCommand } from "./kubectl";
+import {
+  describeFailure,
+  execArgs,
+  isStreamFailure,
+  preferSpdy,
+  prefersSpdy,
+  RemoteError,
+  type RunOptions,
+  type RunResult,
+  runKubectl,
+  shellCommand,
+} from "./kubectl";
 
 const QUICK_TIMEOUT_MS = 60_000;
 // Enough to tell a binary file by its NUL bytes; most binary formats have some in their header.
@@ -103,6 +114,23 @@ if [ -n "$mode" ]; then
 fi
 `;
 const CAT_SCRIPT = `cat -- "$1"`;
+// The size of a regular file, and "dd" when the container has it for reading the file in chunks.
+export const FILE_INFO_SCRIPT = `
+[ -f "$1" ] || { echo "not a regular file: $1" >&2; exit 4; }
+[ -r "$1" ] || { echo "permission denied: $1" >&2; exit 4; }
+s=$(stat -c %s -- "$1" 2>/dev/null) || s=$(wc -c < "$1")
+if command -v dd >/dev/null 2>&1; then d=dd; else d=-; fi
+printf '%s %s\\n' "$s" "$d"
+`;
+const CHUNK_BLOCK_SIZE = 64 * 1024;
+const CHUNK_SIZE = 8 * 1024 * 1024;
+const CHUNK_ATTEMPTS = 3;
+const CHUNK_TIMEOUT_MS = 5 * 60_000;
+// $1: the file, $2: the first block, $3: the number of blocks, in blocks of CHUNK_BLOCK_SIZE bytes.
+export const CHUNK_SCRIPT = `dd if="$1" bs=${CHUNK_BLOCK_SIZE} skip="$2" count="$3" 2>/dev/null`;
+
+/** Bytes done of the total, after every chunk of a download. */
+export type TransferProgress = (done: number, total: number) => void;
 // $1: the parent directory, $2: the name. A symlink to a directory is followed (cd -P), so that the archive holds
 // the directory it points to, under that directory's own name.
 export const TAR_SCRIPT = `cd -- "$1" && cd -P -- "$2" && n=$(pwd -P) && cd .. && tar cf - "./\${n##*/}"`;
@@ -208,7 +236,18 @@ export class PodFileSystem {
 
   /** The size of the file and its first `limit` bytes. */
   private async readStart(target: PodTarget, path: string, limit: number) {
-    const output = await this.exec(target, READ_SCRIPT, [path, String(limit)], `Cannot read ${path}`);
+    const result = await this.transfer(
+      target,
+      execArgs(target, shellCommand(READ_SCRIPT, [path, String(limit)])),
+      () => ({
+        cwd: this.cwd,
+        timeoutMs: QUICK_TIMEOUT_MS,
+      }),
+    );
+    if (result.code !== 0) {
+      throw describeFailure(result, `Cannot read ${path}`);
+    }
+    const output = result.stdout;
     const newline = output.indexOf(0x0a);
     return {
       size: Number(output.subarray(0, newline).toString("utf8").trim()),
@@ -256,10 +295,10 @@ export class PodFileSystem {
   }
 
   async writeBytes(target: PodTarget, path: string, data: Uint8Array) {
-    const result = await runKubectl(
-      target.clusterId,
+    const result = await this.transfer(
+      target,
       execArgs(target, shellCommand(WRITE_SCRIPT, [path, String(data.byteLength)]), true),
-      { cwd: this.cwd, input: data },
+      () => ({ cwd: this.cwd, input: data }),
     );
     if (result.code !== 0) {
       throw describeFailure(result, `Cannot write ${path}`);
@@ -271,14 +310,36 @@ export class PodFileSystem {
     if (!info.isFile()) {
       throw new RemoteError(`${localPath} is not a file`);
     }
-    const result = await runKubectl(
-      target.clusterId,
+    const result = await this.transfer(
+      target,
       execArgs(target, shellCommand(WRITE_SCRIPT, [remotePath, String(info.size)]), true),
-      { cwd: this.cwd, input: createReadStream(localPath) },
+      () => ({ cwd: this.cwd, input: createReadStream(localPath) }),
     );
     if (result.code !== 0) {
       throw describeFailure(result, `Cannot upload ${localPath} to ${remotePath}`);
     }
+  }
+
+  /**
+   * Runs a transfer, and once more over SPDY when its WebSocket stream broke off; a cluster where SPDY then works
+   * keeps using it. Only for what is safe to repeat: reads, and writes that WRITE_SCRIPT stages and checks. `options`
+   * gives fresh streams for each attempt.
+   */
+  private async transfer(
+    target: PodTarget,
+    args: string[],
+    options: () => RunOptions | Promise<RunOptions>,
+  ): Promise<RunResult> {
+    const viaWebSockets = !prefersSpdy(target.clusterId);
+    const result = await runKubectl(target.clusterId, args, await options());
+    if (result.code === 0 || !viaWebSockets || !isStreamFailure(result)) {
+      return result;
+    }
+    const retried = await runKubectl(target.clusterId, args, { ...(await options()), websockets: false });
+    if (retried.code === 0) {
+      preferSpdy(target.clusterId);
+    }
+    return retried;
   }
 
   /**
@@ -296,45 +357,111 @@ export class PodFileSystem {
     }
   }
 
-  async downloadFile(target: PodTarget, remotePath: string, localPath: string) {
+  /**
+   * Downloads a file in chunks of CHUNK_SIZE bytes, each read with `dd` in a kubectl exec of its own, checked for
+   * its length and read again when it fails. One long stream of a large file is what a proxy in front of the API
+   * server cuts most often; a chunk that breaks off costs only that chunk. Without `dd` in the container, the file
+   * comes in one stream.
+   */
+  async downloadFile(target: PodTarget, remotePath: string, localPath: string, onProgress?: TransferProgress) {
+    const info = (await this.exec(target, FILE_INFO_SCRIPT, [remotePath], `Cannot download ${remotePath}`)).toString(
+      "utf8",
+    );
+    const [sizeText, tool] = info.trim().split(/\s+/);
+    const size = Number(sizeText);
+    if (!Number.isFinite(size)) {
+      throw new RemoteError(`Cannot download ${remotePath}: cannot read its size`);
+    }
+
     await this.writeLocal(localPath, async (partPath) => {
-      const output = createWriteStream(partPath);
+      if (tool !== "dd") {
+        await this.downloadStream(target, remotePath, partPath);
+        onProgress?.(size, size);
+        return;
+      }
+      const handle = await open(partPath, "w");
       try {
-        const result = await runKubectl(target.clusterId, execArgs(target, shellCommand(CAT_SCRIPT, [remotePath])), {
-          cwd: this.cwd,
-          output,
-        });
-        if (result.code !== 0) {
-          throw describeFailure(result, `Cannot download ${remotePath}`);
+        onProgress?.(0, size);
+        for (let offset = 0; offset < size; offset += CHUNK_SIZE) {
+          const chunk = await this.readChunk(target, remotePath, offset, Math.min(CHUNK_SIZE, size - offset));
+          await handle.write(chunk);
+          onProgress?.(offset + chunk.length, size);
         }
-      } catch (error) {
-        output.destroy();
-        throw error;
+      } finally {
+        await handle.close();
       }
     });
+  }
+
+  private async readChunk(target: PodTarget, remotePath: string, offset: number, length: number): Promise<Buffer> {
+    const args = execArgs(
+      target,
+      shellCommand(CHUNK_SCRIPT, [
+        remotePath,
+        String(offset / CHUNK_BLOCK_SIZE),
+        String(CHUNK_SIZE / CHUNK_BLOCK_SIZE),
+      ]),
+    );
+    let failure: Error | undefined;
+    for (let attempt = 0; attempt < CHUNK_ATTEMPTS; attempt++) {
+      const result = await this.transfer(target, args, () => ({ cwd: this.cwd, timeoutMs: CHUNK_TIMEOUT_MS }));
+      if (result.code === 0 && result.stdout.length >= length) {
+        // A file that grew since its size was read gives more; the download keeps the size it started with.
+        return result.stdout.subarray(0, length);
+      }
+      failure =
+        result.code !== 0
+          ? describeFailure(result, `Cannot download ${remotePath}`)
+          : new RemoteError(
+              `Cannot download ${remotePath}: ${result.stdout.length} of ${length} bytes arrived at offset ${offset}; did the file shrink?`,
+            );
+      if (result.code !== 0 && !isStreamFailure(result)) {
+        break;
+      }
+    }
+    throw failure;
+  }
+
+  private async downloadStream(target: PodTarget, remotePath: string, partPath: string) {
+    let output: WriteStream | undefined;
+    const result = await this.transfer(target, execArgs(target, shellCommand(CAT_SCRIPT, [remotePath])), async () => {
+      await this.closeStream(output);
+      output = createWriteStream(partPath);
+      return { cwd: this.cwd, output };
+    });
+    await this.closeStream(output);
+    if (result.code !== 0) {
+      throw describeFailure(result, `Cannot download ${remotePath}`);
+    }
   }
 
   /** Writes the directory as a gzipped tar archive; the container needs `tar`. */
   async downloadDirectory(target: PodTarget, remotePath: string, localPath: string) {
     await this.writeLocal(localPath, async (partPath) => {
-      const gzip = createGzip();
-      const written = pipeline(gzip, createWriteStream(partPath));
-      try {
-        const result = await runKubectl(
-          target.clusterId,
-          execArgs(target, shellCommand(TAR_SCRIPT, [parentPath(remotePath), baseName(remotePath)])),
-          { cwd: this.cwd, output: gzip },
-        );
-        if (result.code !== 0) {
-          throw describeFailure(result, `Cannot archive ${remotePath}`);
-        }
-        await written;
-      } catch (error) {
-        gzip.destroy();
-        await written.catch(() => {});
-        throw error;
+      let written: Promise<void> | undefined;
+      const result = await this.transfer(
+        target,
+        execArgs(target, shellCommand(TAR_SCRIPT, [parentPath(remotePath), baseName(remotePath)])),
+        async () => {
+          // A second attempt starts the archive over: the first attempt's file is finished before it is truncated.
+          await written?.catch(() => {});
+          const gzip = createGzip();
+          written = pipeline(gzip, createWriteStream(partPath));
+          return { cwd: this.cwd, output: gzip };
+        },
+      );
+      if (result.code !== 0) {
+        await written?.catch(() => {});
+        throw describeFailure(result, `Cannot archive ${remotePath}`);
       }
+      await written;
     });
+  }
+
+  private async closeStream(stream: WriteStream | undefined) {
+    if (stream && !stream.closed) {
+      await new Promise<void>((resolve) => stream.end(() => resolve()));
+    }
   }
 
   async createFile(target: PodTarget, path: string) {

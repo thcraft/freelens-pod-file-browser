@@ -98,7 +98,12 @@ and the kubectl version are the same as in the Freelens terminal.
   announced number of bytes arrived. Writing into the target, rather than renaming over it, keeps its owner, mode and
   hard links. If the connection breaks off hard, a hidden `.pod-file-browser.XXXXXX` file may be left next to the
   target.
-- Downloads write a `.part` file next to the chosen file and rename it once complete.
+- Files download in chunks of 8 MiB (with `dd` in the container), each in a `kubectl exec` of its own, checked for its
+  length and read again when it breaks off; without `dd` a file comes in one stream. Downloads write a `.part` file next
+  to the chosen file and rename it once complete.
+- kubectl 1.30 and newer run `kubectl exec` over WebSockets, which some proxies in front of the API server cut during a
+  large transfer. When that happens, the transfer is repeated over SPDY (`KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false`), and
+  the cluster keeps using SPDY until Freelens restarts.
 - The listing, reading and other quick operations give up after 60 seconds; deleting, recursive changes and transfers
   take as long as they need.
 

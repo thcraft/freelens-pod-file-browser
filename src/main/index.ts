@@ -18,6 +18,7 @@ import {
   joinPath,
   type LocalFile,
   type PodTarget,
+  type TransferProgressEvent,
   type UploadResult,
 } from "../common/protocol";
 import { SettingsStore } from "../common/settings-store";
@@ -177,7 +178,10 @@ export default class PodFileBrowserMain extends Main.LensExtension {
       const download = (item: DownloadItem, localPath: string) =>
         item.isDirectory
           ? fs.downloadDirectory(target, item.path, localPath)
-          : fs.downloadFile(target, item.path, localPath);
+          : fs.downloadFile(target, item.path, localPath, (done, total) => {
+              const progress: TransferProgressEvent = { path: item.path, done, total };
+              ipc.broadcast(IpcChannel.transferProgress, progress);
+            });
 
       if (items.length === 1) {
         const [item] = items;

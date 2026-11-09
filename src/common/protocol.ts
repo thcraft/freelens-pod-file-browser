@@ -14,6 +14,7 @@ export const IpcChannel = {
   updateStatus: "update-status",
   checkForUpdates: "check-for-updates",
   installUpdate: "install-update",
+  transferProgress: "transfer-progress",
 } as const;
 
 export interface PodTarget {
@@ -102,6 +103,13 @@ export interface DownloadItem {
 export interface DownloadResult {
   /** Local files written; empty when the user cancelled the dialog. */
   saved: string[];
+}
+
+/** Broadcast by main while a file downloads, after every chunk. */
+export interface TransferProgressEvent {
+  path: string;
+  done: number;
+  total: number;
 }
 
 export interface UploadResult {

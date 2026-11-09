@@ -4,13 +4,15 @@ import {
   baseName,
   type DirectoryListing,
   type FileEntry,
+  IpcChannel,
   joinPath,
   MAX_DROP_UPLOAD_SIZE,
   type PodTarget,
   parentPath,
+  type TransferProgressEvent,
 } from "../../common/protocol";
 import { formatSize, formatTime, isDirectoryLike, permissionsToOctal, type SortColumn, sortEntries } from "../format";
-import { podFiles } from "../ipc";
+import { PodFilesIpc, podFiles } from "../ipc";
 import { AttributesDialog, type AttributesRequest } from "./attributes-dialog";
 import styles from "./file-browser.module.scss";
 import { FileEditorDialog } from "./file-editor-dialog";
@@ -63,6 +65,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ column: SortColumn; descending: boolean }>({ column: "name", descending: false });
   const [busy, setBusy] = useState<string>();
+  const [progress, setProgress] = useState<TransferProgressEvent>();
   // Set at once, unlike the state, so that a second action started in the same tick finds it set.
   const busyRef = useRef(false);
   const [dragOver, setDragOver] = useState(false);
@@ -116,6 +119,16 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     return sortEntries(entries, sort.column, sort.descending);
   }, [listing, showHidden, filter, sort]);
 
+  // Main reports the progress of a download after every chunk, to every frame; only the browser that runs an
+  // action shows it.
+  useEffect(
+    () =>
+      PodFilesIpc.getInstance().listen(IpcChannel.transferProgress, (_event, event: TransferProgressEvent) =>
+        setProgress(event),
+      ),
+    [],
+  );
+
   // One action at a time: every way to start one is disabled while another runs, and run() refuses a second.
   const ready = listing !== undefined && busy === undefined;
 
@@ -124,6 +137,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       return;
     }
     busyRef.current = true;
+    setProgress(undefined);
     setBusy(label);
     try {
       await action();
@@ -408,7 +422,10 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
         <Input className={styles.filter} value={filter} onChange={(value) => setFilter(value)} placeholder="Filter" />
         {busy ? (
           <span className={styles.busy}>
-            <Spinner /> {busy}...
+            <Spinner /> {busy}
+            {progress && progress.total > 0
+              ? ` ${baseName(progress.path)}: ${formatSize(progress.done)} of ${formatSize(progress.total)} (${Math.floor((progress.done / progress.total) * 100)} %)`
+              : "..."}
           </span>
         ) : null}
       </div>

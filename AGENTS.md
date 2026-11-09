@@ -215,7 +215,17 @@ Every operation is a POSIX `sh` script in `src/main/pod-fs.ts`, run as
   target as it was. It writes into the target rather than renaming over it, to
   keep owner, mode and hard links.
 - **Downloads are staged locally** in a `.part` file that is renamed over the
-  chosen file only when complete.
+  chosen file only when complete. A file downloads in chunks of `CHUNK_SIZE`
+  (8 MiB) read with `dd` (`CHUNK_SCRIPT`), one `kubectl exec` each, checked for
+  its length and read up to `CHUNK_ATTEMPTS` times; main broadcasts the progress
+  (`transfer-progress`) after every chunk. A folder is one `tar` stream.
+- **WebSockets or SPDY.** kubectl 1.30 and newer run exec over WebSockets, and
+  some proxies in front of the API server cut a WebSocket during a large
+  transfer ("error reading from error stream: read message"). `transfer()`
+  repeats such a transfer once with `KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false`
+  (SPDY), and a cluster where that works keeps SPDY (`preferSpdy`). Only what is
+  safe to repeat goes through `transfer()`: reads, chunks, archives and the
+  staged writes; rename, create and delete do not.
 - **Timeouts.** Quick operations (`exec` with its default) give up after 60 s;
   delete, recursive chmod/chown and transfers pass no timeout.
 

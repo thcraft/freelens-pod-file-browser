@@ -59,6 +59,11 @@ export interface RunOptions {
   cwd: string;
   /** Kills kubectl and fails after this long; transfers of files have none. */
   timeoutMs?: number;
+  /**
+   * The transport of kubectl exec: WebSockets, the default of kubectl since 1.30, or SPDY, the older one, which
+   * `KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false` selects. Defaults to the one that last worked on the cluster.
+   */
+  websockets?: boolean;
 }
 
 export interface RunResult {
@@ -67,8 +72,34 @@ export interface RunResult {
   code: number;
 }
 
+// Clusters where a WebSocket stream of kubectl exec broke off and SPDY then worked: some proxies in front of an API
+// server (and versions of them) cut a WebSocket that carries a large transfer, with "error reading from error stream:
+// read message" from kubectl.
+const spdyClusters = new Set<string>();
+
+export function prefersSpdy(clusterId: string) {
+  return spdyClusters.has(clusterId);
+}
+
+export function preferSpdy(clusterId: string) {
+  if (!spdyClusters.has(clusterId)) {
+    spdyClusters.add(clusterId);
+    console.warn(`[pod-file-browser] kubectl exec over WebSockets broke off on cluster ${clusterId}; using SPDY`);
+  }
+}
+
+/** The stream of kubectl exec broke off, rather than the command in the container failing. */
+export function isStreamFailure(result: RunResult) {
+  return /error reading from error stream|read message|websocket: close|unexpected EOF|stream error|connection reset by peer|use of closed network connection/i.test(
+    result.stderr,
+  );
+}
+
 export async function runKubectl(clusterId: string, args: string[], options: RunOptions): Promise<RunResult> {
-  const { kubectl, env } = await getContext(clusterId);
+  const context = await getContext(clusterId);
+  const { kubectl } = context;
+  const websockets = options.websockets ?? !prefersSpdy(clusterId);
+  const env = websockets ? context.env : { ...context.env, KUBECTL_REMOTE_COMMAND_WEBSOCKETS: "false" };
 
   return new Promise<RunResult>((resolve, reject) => {
     const child = spawn(kubectl, args, {

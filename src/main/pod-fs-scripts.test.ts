@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   ATTRIBUTES_SCRIPT,
+  CHUNK_SCRIPT,
   CREATE_FILE_SCRIPT,
+  FILE_INFO_SCRIPT,
   LIST_SCRIPT,
   parseListing,
   READ_SCRIPT,
@@ -154,5 +156,25 @@ describe.skipIf(!hasShell)("the container scripts", () => {
     const result = spawnSync("sh", ["-c", `${TAR_SCRIPT} | tar tf -`, "sh", root, "link-dir"]);
     expect(result.status).toBe(0);
     expect(result.stdout.toString()).toContain("./real-dir/inside.txt");
+  });
+
+  it("reports the size of a file and reads it block by block", () => {
+    const bytes = Buffer.from(Array.from({ length: 200_000 }, (_, i) => i % 256));
+    writeFileSync(path.join(root, "blocks.bin"), bytes);
+
+    const info = sh(FILE_INFO_SCRIPT, [`${root}/blocks.bin`]);
+    expect(info.code).toBe(0);
+    expect(info.stdout.toString("utf8").trim()).toBe("200000 dd");
+
+    const chunk = sh(CHUNK_SCRIPT, [`${root}/blocks.bin`, "1", "2"]);
+    expect(chunk.code).toBe(0);
+    expect(chunk.stdout.equals(bytes.subarray(65536, 3 * 65536))).toBe(true);
+
+    const last = sh(CHUNK_SCRIPT, [`${root}/blocks.bin`, "3", "2"]);
+    expect(last.stdout.equals(bytes.subarray(3 * 65536))).toBe(true);
+  });
+
+  it("refuses the size of a directory", () => {
+    expect(sh(FILE_INFO_SCRIPT, [`${root}/dir with space`]).code).toBe(4);
   });
 });
