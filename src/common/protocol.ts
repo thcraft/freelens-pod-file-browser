@@ -11,6 +11,9 @@ export const IpcChannel = {
   rename: "rename",
   remove: "remove",
   setAttributes: "set-attributes",
+  updateStatus: "update-status",
+  checkForUpdates: "check-for-updates",
+  installUpdate: "install-update",
 } as const;
 
 export interface PodTarget {

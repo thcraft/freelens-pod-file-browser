@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag like v0.3.0 (or v1.0.0-beta.1): checks that it matches package.json, builds and tests the extension,
-# packs it with its checksum and creates the GitHub release with the notes from CHANGELOG.md.
+# Push a tag like v0.4.0 (or v1.0.0-beta.1): checks that it matches package.json, builds and tests the extension,
+# publishes it to npm, which Freelens installs it from by name, and creates the GitHub release with the tarball, its
+# checksum and the notes from CHANGELOG.md.
 # Run it by hand (Actions > Release > Run workflow) to build the tarball as an artifact without releasing anything.
 on:
   push:
@@ -25,6 +26,9 @@ jobs:
 
     permissions:
       contents: write
+      # npm trusted publishing: npm exchanges the OIDC token of this workflow for a short-lived publish token, so the
+      # repository keeps no npm token.
+      id-token: write
 
     steps:
       - name: Checkout
@@ -42,15 +46,23 @@ jobs:
       - name: Version
         id: version
         run: |
+          name="$(node -p 'require("./package.json").name')"
           version="$(node -p 'require("./package.json").version')"
           if [[ "${GITHUB_REF}" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "${version}" ]]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${version} in package.json"
             exit 1
           fi
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          # 0.x and versions with a suffix (-beta.1) are pre-releases.
+          # The tarball pnpm packs: the scope without "@", joined to the name with "-".
+          tarball="$(echo "${name}" | sed 's#^@##; s#/#-#')-${version}.tgz"
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          # 0.x and versions with a suffix (-beta.1) are pre-releases on GitHub. On npm only a suffix keeps a version
+          # off the "latest" dist-tag, which is what Freelens installs by name.
           if [[ "${version}" == 0.* || "${version}" == *-* ]]; then prerelease=true; else prerelease=false; fi
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          if [[ "${version}" == *-* ]]; then dist_tag=next; else dist_tag=latest; fi
+          echo "dist_tag=${dist_tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Install pnpm dependencies
         run: timeout 300 pnpm install --color=always --frozen-lockfile
@@ -67,16 +79,15 @@ jobs:
       # Freelens checks a tarball installed from a URL against the .tgz.sha256 next to it, in sha256sum format.
       - name: Pack
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.version.outputs.tarball }}
         run: |
           mkdir -p release
           pnpm pack --pack-destination release
           cd release
-          tarball="freelens-pod-file-browser-${VERSION}.tgz"
-          test -f "${tarball}"
-          sha256sum "${tarball}" > "${tarball}.sha256"
-          cat "${tarball}.sha256"
-          tar -tzf "${tarball}"
+          test -f "${TARBALL}"
+          sha256sum "${TARBALL}" > "${TARBALL}.sha256"
+          cat "${TARBALL}.sha256"
+          tar -tzf "${TARBALL}"
 
       # A manual run stops here: the tarball is kept as the "release" artifact of the run.
       - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
@@ -84,6 +95,23 @@ jobs:
         with:
           name: release
           path: release/
+
+      # Trusted publishing needs npm 11.5.1 or newer, which the Node of .nvmrc ships. A version that is on npm already,
+      # such as the first one, published by hand to create the package, is skipped.
+      - name: Publish to npm
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          NAME: ${{ steps.version.outputs.name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.version.outputs.tarball }}
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
+        run: |
+          npm --version
+          if [[ "$(npm view "${NAME}@${VERSION}" version --registry https://registry.npmjs.org/ 2>/dev/null)" == "${VERSION}" ]]; then
+            echo "${NAME}@${VERSION} is on npm already"
+            exit 0
+          fi
+          npm publish "release/${TARBALL}" --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/
 
       - name: Create release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}

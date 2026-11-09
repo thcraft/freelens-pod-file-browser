@@ -3,6 +3,15 @@
 The release workflow copies the section of the released version into the GitHub release notes.
 Add a section `## <version> (<date>)` and set the same version in `package.json` before tagging `v<version>`.
 
+## 0.4.0 (2026-11-09)
+
+- **Published on npm** as `@thcraft/freelens-pod-file-browser`: install it in Freelens by its name, or with the link
+  `freelens://app/extensions/install/@thcraft/freelens-pod-file-browser`.
+- **New version notifications.** Once a day the extension asks npm whether a newer version has been published and shows
+  a system notification, once per version; click it and Freelens installs the new version after you confirm it. The
+  preferences of the extension (_Pod File Browser updates_) turn it off, show the installed and the newest version,
+  check right away and install it. The check sends nothing but the request for the newest version.
+
 ## 0.3.0 (2026-11-08)
 
 - **Files in any text encoding.** The editor opens files as UTF-8 (UTF-16 by its byte order mark). A file that is not

@@ -1,0 +1,19 @@
+@use "../vars";
+
+.preference {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding * 1.5;
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding * 0.5;
+  color: var(--textColorSecondary);
+}
+
+.buttons {
+  display: flex;
+  gap: vars.$padding;
+}

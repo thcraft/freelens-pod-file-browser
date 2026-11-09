@@ -145,11 +145,14 @@ pnpm clean:all            # Clean everything (dist, dts, node_modules, tgz)
 ```text
 src/
   common/protocol.ts              # IPC channels, shared types, path helpers, mode/owner validation, text encodings
+  common/settings-store.ts        # The extension's settings (ExtensionStore), loaded and synced by both processes
+  common/updates.ts               # Package name, npm registry and install URLs, version comparison
   main/index.ts                   # Main entry (Main.LensExtension): IPC handlers, open/save dialogs, picked files
   main/kubectl.ts                 # Runs the host's kubectl with the cluster's environment; exec and sh -c arguments
   main/pod-fs.ts                  # The container scripts (POSIX sh) and the file operations built on them
   main/encoding.ts                # Default encoding, binary detection, decoding and encoding with iconv-lite
   main/local-names.ts             # Local file names for downloads that Windows accepts
+  main/update-check.ts            # Daily check of the npm registry and the system notification of a new version
   renderer/index.tsx              # Renderer entry (Renderer.LensExtension): every registration
   renderer/ipc.ts                 # Renderer.Ipc client: one typed function per channel
   renderer/pages/                 # The "Pod Files" cluster page: namespace, pod and container in the URL
@@ -159,6 +162,7 @@ src/
   renderer/pod-containers.ts      # Containers of a host Pod object, the default container, labels
   renderer/format.ts              # Sizes, times, sorting, permissions to octal, editor language
   renderer/icons/                 # The sidebar icon
+  renderer/preferences/           # The update setting and status in Preferences > Extensions
 test/freelens-extensions.ts       # Runtime stub of @freelensapp/extensions for Vitest
 environment-tests/               # Probes for the per-environment programs
 build/                           # Vite plugins: host modules, standard decorators, CSS module declarations
@@ -231,6 +235,23 @@ order mark; nothing else is guessed. A file is editable only when its content
 encodes back to exactly the bytes read (`lossless`), and `encodeText` refuses
 characters the encoding cannot hold instead of letting iconv-lite write `?`.
 `iconv-lite` is the one bundled runtime dependency.
+
+### New version notifications
+
+`UpdateChecker` (`src/main/update-check.ts`) runs in main, which exists
+once; the renderer runs in the root frame and in every cluster frame and would
+notify once per frame. It reads the registry document of the `latest`
+dist-tag (`LATEST_URL`) with `Main.Util.fetch`, which applies the user's
+proxy settings (contract C12 of `api.md`), a minute after activation and then
+every 24 hours, and shows an Electron `Notification` once per version
+(`notifiedVersion`). Clicking it, or "Install" in the preference, opens
+`INSTALL_URL` (`freelens://app/extensions/install/<package>`): Freelens asks
+the user to confirm and replaces the installed version. The setting
+`checkForUpdates` lives in `SettingsStore`, an `ExtensionStore` both
+processes load: the host keeps one file and syncs the two copies, so the
+checkbox in the renderer turns the check in main off and on. The preference
+shows the status that main reports over IPC (`update-status`,
+`check-for-updates`, `install-update`).
 
 ### Renderer
 
@@ -716,27 +737,36 @@ problem does not show.
 
 ### Workflows
 
-| Workflow               | Runs                                                                             |
-| ---------------------- | -------------------------------------------------------------------------------- |
-| `type-check.yaml`      | `pnpm type:check`                                                                |
-| `check.yaml`           | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                               |
-| `unit-tests.yaml`      | `pnpm test:unit`                                                                 |
-| `trunk-check.yaml`     | `trunk check --all`                                                              |
-| `mise-lock-check.yaml` | on a change to `mise.lock`: no checksum changed for an unchanged tool version    |
-| `cleanup-cache.yaml`   | on a closed pull request: deletes the caches of its merge ref                    |
-| `release.yaml`         | on a `v*` tag: type check, tests, build, pack with `.tgz.sha256`, GitHub release |
+| Workflow               | Runs                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `type-check.yaml`      | `pnpm type:check`                                                                             |
+| `check.yaml`           | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                                            |
+| `unit-tests.yaml`      | `pnpm test:unit`                                                                              |
+| `trunk-check.yaml`     | `trunk check --all`                                                                           |
+| `mise-lock-check.yaml` | on a change to `mise.lock`: no checksum changed for an unchanged tool version                 |
+| `cleanup-cache.yaml`   | on a closed pull request: deletes the caches of its merge ref                                 |
+| `release.yaml`         | on a `v*` tag: type check, tests, build, pack with `.tgz.sha256`, npm publish, GitHub release |
 
 The type check has a workflow of its own, as in Freelens, so that a type error
 shows as its own failed check rather than as a failed build. `check.yaml`
 builds without the type check for the same reason, so it does not run twice.
 
 `release.yaml` fails when the tag does not match `version` in `package.json`.
-It packs `freelens-pod-file-browser-<version>.tgz` and writes its
+It packs `thcraft-freelens-pod-file-browser-<version>.tgz` and writes its
 `sha256sum` line into `<tarball>.sha256`: Freelens checks a tarball installed
-from a URL against that file next to it. The release notes are the section of
-the version in `CHANGELOG.md`; 0.x versions and versions with a suffix are
+from a URL against that file next to it. It publishes the tarball to npm with
+trusted publishing: the job has `id-token: write`, npm exchanges the OIDC token
+for a publish token, and the repository keeps no npm token. The package on
+npmjs.com names this repository and `release.yaml` as its trusted publisher;
+renaming either breaks publishing until the setting is changed there. A
+version with a suffix goes to the `next` dist-tag, any other to `latest`,
+which Freelens installs by name. A version that is on npm already is skipped,
+so the first version, published by hand to create the package, still gets its
+GitHub release. The release notes are the section of the version in
+`CHANGELOG.md`; 0.x versions and versions with a suffix are GitHub
 pre-releases. Run by hand, the workflow keeps the tarball as an artifact and
-releases nothing.
+releases nothing. Push one tag at a time: GitHub starts no workflow for a push
+of more than three tags.
 
 To release: add a `## <version> (<date>)` section to `CHANGELOG.md`, set the
 same version in `package.json`, commit, tag `v<version>` and push the tag.
@@ -780,7 +810,7 @@ the checkout as well, but has no debugging port.
   in the main page.
 - Pages of the extension have URLs like `/extension/<name>/<pageId>`, with the
   package name's `@` dropped and `/` turned into `--`, here
-  `/extension/freelens-pod-file-browser/pod-files`. The sidebar entries
+  `/extension/thcraft--freelens-pod-file-browser/pod-files`. The sidebar entries
   navigate in `onClick`; their `href` is not the page URL. A click on an
   entry's `[data-testid="sidebar-item-…"]` element does not navigate; a DOM
   `click()` on the link inside it, `[data-testid="link-for-sidebar-item-…"]`,

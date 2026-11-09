@@ -20,8 +20,10 @@ import {
   type PodTarget,
   type UploadResult,
 } from "../common/protocol";
+import { SettingsStore } from "../common/settings-store";
 import { localNameFor } from "./local-names";
 import { PodFileSystem } from "./pod-fs";
+import { UpdateChecker } from "./update-check";
 
 class PodFilesIpc extends Main.Ipc {}
 
@@ -61,7 +63,20 @@ async function uniqueLocalPath(directory: string, name: string) {
 }
 
 export default class PodFileBrowserMain extends Main.LensExtension {
+  private updates?: UpdateChecker;
+
+  async onDeactivate() {
+    this.updates?.stop();
+  }
+
   async onActivate() {
+    const settings = SettingsStore.getInstanceOrCreate<SettingsStore>();
+    settings.loadExtension(this);
+    this.updates?.stop();
+    const updates = new UpdateChecker(this.version, settings);
+    this.updates = updates;
+    updates.start();
+
     const fs = new PodFileSystem(path.dirname(this.manifestPath));
     // The local files the user chose in the upload dialog. Main uploads only those, so that the renderer cannot have
     // it read any other file of the user's.
@@ -119,6 +134,12 @@ export default class PodFileBrowserMain extends Main.LensExtension {
     handle(IpcChannel.setAttributes, (_event, target: PodTarget, paths: string[], attributes: FileAttributes) =>
       fs.setAttributes(target, paths, attributes),
     );
+
+    handle(IpcChannel.updateStatus, async () => updates.status());
+
+    handle(IpcChannel.checkForUpdates, () => updates.check());
+
+    handle(IpcChannel.installUpdate, () => updates.install());
 
     handle(IpcChannel.pickUploadFiles, async (event): Promise<LocalFile[]> => {
       const result = await showOpenDialog(event, {

@@ -31,6 +31,10 @@ folders, and drag files in or save them out.
   away.
 - **New folder, new file, rename, delete** (with confirmation).
 - **Init and ephemeral containers** are listed too, so a debug container can be browsed.
+- **New version notifications.** Once a day the extension asks npm whether a newer version has been published and
+  shows a system notification, once per version; click it and Freelens installs the new version after you confirm it.
+  Turn it off in the Freelens preferences of the extension (_Pod File Browser updates_), where you also see the
+  installed and the newest version, check right away and install it.
 
 ## Requirements
 
@@ -46,18 +50,23 @@ folders, and drag files in or save them out.
 ## Install
 
 Open Freelens and go to **Extensions** (`Ctrl`+`Shift`+`E`, on macOS `Cmd`+`Shift`+`E`). The field at the top takes
-the URL of a tarball, or the path to a tarball or a directory.
+the name of a package, the URL of a tarball, or the path to a tarball or a directory.
 
-### From a release
+### From npm
 
-Each [release](https://github.com/thcraft/freelens-pod-file-browser/releases) has the extension as
-`freelens-pod-file-browser-<version>.tgz`, with its checksum in `freelens-pod-file-browser-<version>.tgz.sha256`.
+Enter `@thcraft/freelens-pod-file-browser` and press **Install**, or open this link, which starts Freelens on the
+Extensions page and asks you to confirm the installation:
 
-- Copy the URL of the `.tgz` asset into the field and press **Install**. Freelens downloads the `.tgz.sha256` next to it
-  and checks the tarball against it.
-- Or download both files into one folder and enter the path to the `.tgz`, or drop the `.tgz` on the Freelens window.
+[freelens://app/extensions/install/@thcraft/freelens-pod-file-browser](freelens://app/extensions/install/@thcraft/freelens-pod-file-browser)
 
-To update, install the newer release the same way.
+Freelens downloads the package from the npm registry and checks it against the integrity the registry gives. To update,
+do the same, or click the notification the extension shows when a new version is out: Freelens replaces the installed
+version after you confirm it.
+
+### From a tarball
+
+The package on npm is a tarball you can download as well (`npm pack @thcraft/freelens-pod-file-browser`); enter the
+path to it, or drop it on the Freelens window.
 
 ### From the source
 
@@ -92,6 +101,10 @@ and the kubectl version are the same as in the Freelens terminal.
 - Downloads write a `.part` file next to the chosen file and rename it once complete.
 - The listing, reading and other quick operations give up after 60 seconds; deleting, recursive changes and transfers
   take as long as they need.
+
+The update check asks the npm registry for the newest version of the package
+(`https://registry.npmjs.org/@thcraft%2Ffreelens-pod-file-browser/latest`) a minute after Freelens starts and then once
+a day, through the proxy settings of Freelens. It sends nothing else, and turned off it reads nothing.
 
 Known limitations: file names containing a newline are not listed correctly, and the editor normalises mixed line
 endings (CRLF and LF) to the prevailing one when you save.
@@ -129,17 +142,20 @@ The unit tests run the container scripts in the local POSIX shell where there is
 cover the scripts themselves, not only their callers.
 
 **CI.** The workflows in `.github/workflows` type-check, test, build, lint and run Knip on every push and pull request.
-`release.yaml` runs on a `v*` tag: it checks that the tag matches `package.json`, builds and tests the extension, packs
-it into `freelens-pod-file-browser-<version>.tgz` with its `.tgz.sha256`, and creates the GitHub release (0.x and
-versions with a suffix as pre-releases) with the notes from `CHANGELOG.md`. Running it by hand builds the tarball as an
-artifact without releasing anything.
+`release.yaml` runs on a `v*` tag: it checks that the tag matches `package.json`, builds and tests the extension,
+publishes it to npm with trusted publishing (no npm token in the repository; versions with a suffix go to the `next`
+dist-tag, others to `latest`), and creates the GitHub release (0.x and versions with a suffix as pre-releases) with
+the tarball, its `.tgz.sha256` and the notes from `CHANGELOG.md`. Running it by hand builds the tarball as an artifact
+without releasing anything.
 
 To release, add a `## <version> (<date>)` section to `CHANGELOG.md`, set the version in `package.json`, commit, and tag:
 
 ```sh
-git tag -a v0.3.0 -m "Pod File Browser 0.3.0"
-git push origin main v0.3.0
+git tag -a v0.4.0 -m "Pod File Browser 0.4.0"
+git push origin main v0.4.0
 ```
+
+Push one tag at a time: GitHub starts no workflow for a push of more than three tags.
 
 ## License
 

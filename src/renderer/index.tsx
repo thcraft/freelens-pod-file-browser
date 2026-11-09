@@ -1,4 +1,5 @@
 import { Renderer } from "@freelensapp/extensions";
+import { SettingsStore } from "../common/settings-store";
 import {
   withDetailsErrorBoundary,
   withMenuItemErrorBoundary,
@@ -9,13 +10,25 @@ import { PodFilesIcon } from "./icons";
 import { PodFilesIpc } from "./ipc";
 import { PodFilesMenuItem } from "./menus/pod-files-menu-item";
 import { PodFilesPage, podFilesPageId, podFilesPageParams } from "./pages/pod-files-page";
+import { UpdatePreferenceHint, UpdatePreferenceInput } from "./preferences/update-preference";
 
 // Every page and menu item renders inside an error boundary, so that an error it throws stays in its place: the host
 // has none around a menu item, and its boundary around the cluster frame would replace the whole cluster view.
 export default class PodFileBrowserRenderer extends Renderer.LensExtension {
   async onActivate() {
     PodFilesIpc.createInstance(this);
+    SettingsStore.getInstanceOrCreate<SettingsStore>().loadExtension(this);
   }
+
+  appPreferences = [
+    {
+      title: "Pod File Browser updates",
+      components: {
+        Input: () => <UpdatePreferenceInput />,
+        Hint: () => <UpdatePreferenceHint />,
+      },
+    },
+  ];
 
   clusterPages: Renderer.LensExtension["clusterPages"] = [
     {

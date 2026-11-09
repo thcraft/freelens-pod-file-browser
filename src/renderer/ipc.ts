@@ -13,6 +13,8 @@ import {
   type UploadResult,
 } from "../common/protocol";
 
+import type { UpdateStatus } from "../common/updates";
+
 export class PodFilesIpc extends Renderer.Ipc {}
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -41,4 +43,7 @@ export const podFiles = {
   remove: (target: PodTarget, paths: string[]) => invoke<void>(IpcChannel.remove, target, paths),
   setAttributes: (target: PodTarget, paths: string[], attributes: FileAttributes) =>
     invoke<void>(IpcChannel.setAttributes, target, paths, attributes),
+  updateStatus: () => invoke<UpdateStatus>(IpcChannel.updateStatus),
+  checkForUpdates: () => invoke<UpdateStatus>(IpcChannel.checkForUpdates),
+  installUpdate: () => invoke<void>(IpcChannel.installUpdate),
 };
