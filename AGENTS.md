@@ -155,7 +155,7 @@ src/
   main/update-check.ts            # Daily check of the npm registry and the system notification of a new version
   renderer/index.tsx              # Renderer entry (Renderer.LensExtension): every registration
   renderer/ipc.ts                 # Renderer.Ipc client: one typed function per channel
-  renderer/pages/                 # The "Pod Files" cluster page: namespace, pod and container in the URL
+  renderer/pages/                 # The "Pod Files" cluster page and its tabs: namespace, pod and container in the URL
   renderer/details/               # The "Files" section of the pod details
   renderer/menus/                 # "Browse files" in the pod menu, which opens the page
   renderer/components/            # FileBrowser and its dialogs, PathBar, ErrorBoundary and ErrorPage
@@ -275,6 +275,17 @@ shows the status that main reports over IPC (`update-status`,
 - **One action at a time.** `run()` refuses a second action (`busyRef`), and
   every way to start one, toolbar, row icons, drag and drop, is disabled while
   `ready` is false.
+- The page shows tabs (`PodTab`) in the host's `Tabs`, each a namespace, pod and container picker with a
+  `FileBrowser`. Every tab stays mounted and the inactive ones are hidden, so that a tab keeps its listing, selection
+  and a running action. The first tab keeps its namespace, pod, container and path in `PageParam`s of their own,
+  which "Browse files" and the pod details open with a single tab; its id is in `first`, the other tabs are a JSON
+  array in `tabs`, and `tab` is the id of the active one. The ids are React keys, so closing a tab does not remount
+  the others. Main broadcasts the progress of a download to every frame with the id that the browser gave it, and a
+  browser shows only its own.
+- The host keeps the `PageParam`s of a page for the life of the frame, keyed by extension and page id
+  (`extension-page-parameters.injectable.ts` of Freelens), so after the extension is updated in place, from npm or by
+  a rebuild, the page still gets the params of the version that loaded first. A param added in a later version is
+  missing until Freelens restarts; `pageParam()` in the page creates it with `Renderer.Navigation.createPageParam`.
 - The page keeps namespace, pod, container and path in `PageParam`s. The
   host's `Select` calls `onChange` inside a mobx action, where several
   `PageParam.set()` calls each start from the old URL; change several params

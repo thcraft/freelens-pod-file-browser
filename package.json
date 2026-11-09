@@ -1,6 +1,6 @@
 {
   "name": "@thcraft/freelens-pod-file-browser",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Freelens extension that browses the filesystem of pod containers: download, upload, edit in any text encoding, chmod, chown, rename and delete files",
   "homepage": "https://github.com/thcraft/freelens-pod-file-browser#readme",
   "repository": {

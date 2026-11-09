@@ -107,6 +107,8 @@ export interface DownloadResult {
 
 /** Broadcast by main while a file downloads, after every chunk. */
 export interface TransferProgressEvent {
+  /** The transfer, as the renderer that started it named it. */
+  id: string;
   path: string;
   done: number;
   total: number;

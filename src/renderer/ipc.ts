@@ -36,7 +36,8 @@ export const podFiles = {
   pickUploadFiles: () => invoke<LocalFile[]>(IpcChannel.pickUploadFiles),
   uploadFiles: (target: PodTarget, directory: string, files: string[]) =>
     invoke<UploadResult>(IpcChannel.uploadFiles, target, directory, files),
-  download: (target: PodTarget, items: DownloadItem[]) => invoke<DownloadResult>(IpcChannel.download, target, items),
+  download: (target: PodTarget, items: DownloadItem[], transferId: string) =>
+    invoke<DownloadResult>(IpcChannel.download, target, items, transferId),
   createFile: (target: PodTarget, path: string) => invoke<void>(IpcChannel.createFile, target, path),
   makeDirectory: (target: PodTarget, path: string) => invoke<void>(IpcChannel.makeDirectory, target, path),
   rename: (target: PodTarget, from: string, to: string) => invoke<void>(IpcChannel.rename, target, from, to),

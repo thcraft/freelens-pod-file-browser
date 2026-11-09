@@ -17,6 +17,7 @@ folders, and drag files in or save them out.
 - **Where you need it.** A "Pod Files" page in the cluster sidebar (namespace, pod and container pickers, kept in the
   URL so Back works), a "Browse files" item in the pod menu, and a "Files" section in the pod details. All three are
   the same browser.
+- **Tabs.** The page opens as many tabs as you need, each with its own namespace, pod, container and folder.
 - **Browse.** Sizes, modification times, permissions, owners and symlink targets; sorting, filter and hidden files.
   Click a segment of the path to go there, or click the path bar to type a path.
 - **Download** files, and folders as `.tar.gz`; several items at once into a folder.

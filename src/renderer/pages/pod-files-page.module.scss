@@ -10,6 +10,35 @@
   box-sizing: border-box;
 }
 
+.tabBar {
+  display: flex;
+  align-items: center;
+  gap: vars.$padding;
+}
+
+.tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.tabLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: vars.$padding * 0.5;
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$padding * 1.5;
+  flex: 1;
+  min-height: 0;
+}
+
+.hidden {
+  display: none;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

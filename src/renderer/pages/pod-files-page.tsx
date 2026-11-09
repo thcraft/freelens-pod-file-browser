@@ -1,85 +1,105 @@
 import { type Common, Renderer } from "@freelensapp/extensions";
 import { runInAction } from "mobx";
 import { observer } from "mobx-react";
-import { useEffect, useMemo, useState } from "react";
-import { FileBrowser } from "../components/file-browser";
-import { containerLabel, defaultContainer, podContainers } from "../pod-containers";
 import styles from "./pod-files-page.module.scss";
+import { PodTab, type TabLocation } from "./pod-tab";
 
-import type { PodTarget } from "../../common/protocol";
-
-const { NamespaceSelect, Select } = Renderer.Component;
+const { Icon, Tab, Tabs } = Renderer.Component;
 
 export const podFilesPageId = "pod-files";
 
+// The first tab keeps its location in params of its own, which "Browse files" and the pod details open with a single
+// tab. `first` is its id, `tabs` the other tabs as a JSON array, and `tab` the id of the active tab; an empty
+// `first` or `tab` stands for the default id of the first tab.
 export const podFilesPageParams = {
   namespace: "",
   pod: "",
   container: "",
   path: "",
+  first: "",
+  tabs: "",
+  tab: "",
 };
 
 type PodFilesPageParam = keyof typeof podFilesPageParams;
 
 export type PodFilesPageProps = Common.Types.PageComponentProps;
 
-function message(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+const FIRST_TAB_ID = "first";
+
+interface PageTab extends TabLocation {
+  /** Keeps the state of a tab, such as its selection, when another tab opens or closes. */
+  id: string;
+}
+
+// The host keeps the params of a page for the life of the frame, keyed by extension and page id, so after the
+// extension is updated in place the page still gets the params of the version that loaded first. A param that version
+// did not declare is created here, once per frame.
+const createdParams = new Map<PodFilesPageParam, Renderer.Navigation.PageParam<string>>();
+
+function pageParam(params: PodFilesPageProps["params"], name: PodFilesPageParam) {
+  const registered = params[name] as Renderer.Navigation.PageParam<string> | undefined;
+  if (registered) {
+    return registered;
+  }
+  let created = createdParams.get(name);
+  if (!created) {
+    created = Renderer.Navigation.createPageParam({ name, defaultValue: podFilesPageParams[name] });
+    createdParams.set(name, created);
+  }
+  return created;
+}
+
+function newTabId() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function isPageTab(value: unknown): value is PageTab {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const tab = value as Record<string, unknown>;
+  return ["id", "namespace", "pod", "container", "path"].every((key) => typeof tab[key] === "string");
+}
+
+/** The other tabs from the `tabs` param; anything that is not one, or repeats an id, from an edited URL is left out. */
+function parseTabs(raw: string, firstId: string): PageTab[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    const ids = new Set([firstId]);
+    return value.filter(isPageTab).filter((tab) => {
+      const unique = !ids.has(tab.id);
+      ids.add(tab.id);
+      return unique;
+    });
+  } catch {
+    return [];
+  }
+}
+
+function tabLabel(tab: TabLocation) {
+  return tab.pod ? `${tab.pod}${tab.container ? ` / ${tab.container}` : ""}` : "New tab";
 }
 
 export const PodFilesPage = observer(({ params }: PodFilesPageProps) => {
-  // Read here rather than when the module loads: the renderer entry loads in the root frame too, which has no
-  // cluster and no pod store.
-  const { podsStore } = Renderer.K8sApi;
   const clusterId = Renderer.Catalog.getActiveCluster()?.id;
-  const namespace = (params.namespace?.get() as string | undefined) || "default";
-  const podName = (params.pod?.get() as string | undefined) ?? "";
-  const containerParam = (params.container?.get() as string | undefined) ?? "";
-  const pathParam = (params.path?.get() as string | undefined) ?? "";
 
-  const [podsError, setPodsError] = useState<string>();
-  const [podsLoading, setPodsLoading] = useState(false);
-  const [podsReloadKey, setPodsReloadKey] = useState(0);
-
-  // The pods come from the host's store, the same objects its Pods page and the pod details show. Read while
-  // rendering, they follow the store's updates of the observable items.
-  const pods = podsStore
-    .getAllByNs(namespace)
-    .slice()
-    .sort((a, b) => a.getName().localeCompare(b.getName()));
-  const pod = pods.find((p) => p.getName() === podName);
-  const containers = pod ? podContainers(pod) : [];
-  const container = containerParam || defaultContainer(containers);
-
-  const target = useMemo<PodTarget | undefined>(
-    () => (clusterId && podName && container ? { clusterId, namespace, pod: podName, container } : undefined),
-    [clusterId, namespace, podName, container],
-  );
-
-  // Loads the pods of the namespace into the host's store. `merge` replaces those of this namespace only and keeps
-  // what other views loaded. The controller is created in the effect, so that the cleanup of a StrictMode run aborts
-  // only its own request; the store takes an aborted load for no failure.
-  useEffect(() => {
-    if (!clusterId) {
-      return;
-    }
-    const controller = new AbortController();
-    setPodsLoading(true);
-    setPodsError(undefined);
-    podsStore
-      .loadAll({
-        namespaces: [namespace],
-        merge: true,
-        reqInit: { signal: controller.signal },
-        onLoadFailure: (error) => {
-          if (!controller.signal.aborted) {
-            setPodsError(message(error instanceof Error && error.cause ? error.cause : error));
-          }
-        },
-      })
-      .finally(() => !controller.signal.aborted && setPodsLoading(false));
-    return () => controller.abort();
-  }, [clusterId, namespace, podsReloadKey]);
+  const param = (name: PodFilesPageParam) => pageParam(params, name).get() ?? "";
+  const first: PageTab = {
+    id: param("first") || FIRST_TAB_ID,
+    namespace: param("namespace"),
+    pod: param("pod"),
+    container: param("container"),
+    path: param("path"),
+  };
+  const tabs = [first, ...parseTabs(param("tabs"), first.id)];
+  const active = tabs.find((tab) => tab.id === param("tab"))?.id ?? first.id;
 
   // `PageParam.set()` builds the URL from the history's search params, which follow the location only once the
   // outermost mobx action ends, and the host's `Select` calls `onChange` inside an action. Several `set()` calls in a
@@ -88,17 +108,48 @@ export const PodFilesPage = observer(({ params }: PodFilesPageProps) => {
   const updateParams = (values: Partial<Record<PodFilesPageParam, string>>) =>
     runInAction(() => {
       for (const [name, value] of Object.entries(values) as [PodFilesPageParam, string][]) {
-        const param = params[name];
-        if (!param) {
-          continue;
-        }
         if (value) {
-          param.setRaw(value);
+          pageParam(params, name).setRaw(value);
         } else {
-          param.clear();
+          pageParam(params, name).clear();
         }
       }
     });
+
+  const setTabs = (next: PageTab[], activeId: string) => {
+    const [head, ...rest] = next;
+    updateParams({
+      namespace: head.namespace,
+      pod: head.pod,
+      container: head.container,
+      path: head.path,
+      first: head.id === FIRST_TAB_ID ? "" : head.id,
+      tabs: rest.length > 0 ? JSON.stringify(rest) : "",
+      tab: activeId === head.id ? "" : activeId,
+    });
+  };
+
+  const change = (id: string, values: Partial<TabLocation>) =>
+    setTabs(
+      tabs.map((tab) => (tab.id === id ? { ...tab, ...values } : tab)),
+      active,
+    );
+
+  // A new tab opens at the end, in the namespace of the active one.
+  const add = () => {
+    const namespace = tabs.find((tab) => tab.id === active)?.namespace ?? "";
+    const tab: PageTab = { id: newTabId(), namespace, pod: "", container: "", path: "" };
+    setTabs([...tabs, tab], tab.id);
+  };
+
+  // Closing the active tab activates the one after it, or the one before it when it was the last.
+  const close = (id: string) => {
+    const index = tabs.findIndex((tab) => tab.id === id);
+    const next = tabs.filter((tab) => tab.id !== id);
+    setTabs(next, id === active ? (next[index] ?? next[index - 1]).id : active);
+  };
+
+  const select = (id: string) => updateParams({ tab: id === first.id ? "" : id });
 
   if (!clusterId) {
     return <div className={styles.empty}>No active cluster.</div>;
@@ -106,50 +157,44 @@ export const PodFilesPage = observer(({ params }: PodFilesPageProps) => {
 
   return (
     <div className={styles.page}>
-      <div className={styles.toolbar}>
-        <div className={styles.selector}>
-          <span>Namespace</span>
-          <NamespaceSelect
-            id="pod-files-namespace"
-            value={namespace}
-            onChange={(option) => option && updateParams({ namespace: option.value, pod: "", container: "", path: "" })}
-          />
-        </div>
-        <div className={styles.selector}>
-          <span>Pod</span>
-          <Select
-            id="pod-files-pod"
-            value={podName || null}
-            isLoading={podsLoading}
-            placeholder={podsLoading ? "Loading pods..." : "Select a pod"}
-            options={pods.map((p) => ({ value: p.getName(), label: `${p.getName()} (${p.getStatusMessage()})` }))}
-            onMenuOpen={() => setPodsReloadKey((key) => key + 1)}
-            onChange={(option) => option && updateParams({ pod: option.value, container: "", path: "" })}
-          />
-        </div>
-        <div className={styles.selector}>
-          <span>Container</span>
-          <Select
-            id="pod-files-container"
-            value={container || null}
-            isDisabled={!pod}
-            options={containers.map((c) => ({ value: c.name, label: containerLabel(c) }))}
-            onChange={(option) => option && updateParams({ container: option.value, path: "" })}
-          />
-        </div>
+      <div className={styles.tabBar}>
+        <Tabs className={styles.tabs} scrollable value={active} onChange={select}>
+          {tabs.map((tab) => (
+            <Tab
+              key={tab.id}
+              value={tab.id}
+              label={
+                <span className={styles.tabLabel} title={`${tab.namespace || "default"} / ${tabLabel(tab)}`}>
+                  {tabLabel(tab)}
+                  {tabs.length > 1 ? (
+                    <Icon
+                      small
+                      material="close"
+                      interactive
+                      tooltip="Close tab"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        close(tab.id);
+                      }}
+                    />
+                  ) : null}
+                </span>
+              }
+            />
+          ))}
+        </Tabs>
+        <Icon material="add" interactive tooltip="New tab" onClick={add} />
       </div>
-
-      {podsError ? <div className={styles.error}>{podsError}</div> : null}
-
-      {target ? (
-        <FileBrowser target={target} path={pathParam} onNavigate={(path) => updateParams({ path })} />
-      ) : (
-        <div className={styles.empty}>
-          {podName && !podsLoading && !pod
-            ? `Pod ${podName} not found in ${namespace}.`
-            : "Select a pod to browse its files."}
-        </div>
-      )}
+      {tabs.map((tab) => (
+        <PodTab
+          key={tab.id}
+          id={tab.id}
+          clusterId={clusterId}
+          location={tab}
+          onChange={(values) => change(tab.id, values)}
+          hidden={tab.id !== active}
+        />
+      ))}
     </div>
   );
 });

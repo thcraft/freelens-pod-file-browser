@@ -66,6 +66,8 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
   const [sort, setSort] = useState<{ column: SortColumn; descending: boolean }>({ column: "name", descending: false });
   const [busy, setBusy] = useState<string>();
   const [progress, setProgress] = useState<TransferProgressEvent>();
+  // The download of the action that runs, so that a browser shows the progress of its own download only.
+  const transferRef = useRef<string | undefined>(undefined);
   // Set at once, unlike the state, so that a second action started in the same tick finds it set.
   const busyRef = useRef(false);
   const [dragOver, setDragOver] = useState(false);
@@ -119,13 +121,15 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
     return sortEntries(entries, sort.column, sort.descending);
   }, [listing, showHidden, filter, sort]);
 
-  // Main reports the progress of a download after every chunk, to every frame; only the browser that runs an
-  // action shows it.
+  // Main reports the progress of a download after every chunk, to every frame; only the browser that started it
+  // shows it.
   useEffect(
     () =>
-      PodFilesIpc.getInstance().listen(IpcChannel.transferProgress, (_event, event: TransferProgressEvent) =>
-        setProgress(event),
-      ),
+      PodFilesIpc.getInstance().listen(IpcChannel.transferProgress, (_event, event: TransferProgressEvent) => {
+        if (event.id === transferRef.current) {
+          setProgress(event);
+        }
+      }),
     [],
   );
 
@@ -148,6 +152,7 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       Notifications.error(message(error));
     } finally {
       busyRef.current = false;
+      transferRef.current = undefined;
       setBusy(undefined);
       reload();
     }
@@ -229,9 +234,12 @@ export function FileBrowser({ target, path, onNavigate, compact = false }: FileB
       return;
     }
     await run("Downloading", async () => {
+      const transferId = Math.random().toString(36).slice(2);
+      transferRef.current = transferId;
       const result = await podFiles.download(
         target,
         entries.map((entry) => ({ path: joinPath(currentPath, entry.name), isDirectory: isDirectoryLike(entry) })),
+        transferId,
       );
       if (result.saved.length > 0) {
         Notifications.ok(result.saved.length === 1 ? `Saved ${result.saved[0]}` : `Saved ${result.saved.length} items`);

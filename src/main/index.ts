@@ -174,42 +174,45 @@ export default class PodFileBrowserMain extends Main.LensExtension {
       },
     );
 
-    handle(IpcChannel.download, async (event, target: PodTarget, items: DownloadItem[]): Promise<DownloadResult> => {
-      const download = (item: DownloadItem, localPath: string) =>
-        item.isDirectory
-          ? fs.downloadDirectory(target, item.path, localPath)
-          : fs.downloadFile(target, item.path, localPath, (done, total) => {
-              const progress: TransferProgressEvent = { path: item.path, done, total };
-              ipc.broadcast(IpcChannel.transferProgress, progress);
-            });
+    handle(
+      IpcChannel.download,
+      async (event, target: PodTarget, items: DownloadItem[], transferId: string): Promise<DownloadResult> => {
+        const download = (item: DownloadItem, localPath: string) =>
+          item.isDirectory
+            ? fs.downloadDirectory(target, item.path, localPath)
+            : fs.downloadFile(target, item.path, localPath, (done, total) => {
+                const progress: TransferProgressEvent = { id: transferId, path: item.path, done, total };
+                ipc.broadcast(IpcChannel.transferProgress, progress);
+              });
 
-      if (items.length === 1) {
-        const [item] = items;
-        const result = await showSaveDialog(event, {
-          title: item.isDirectory ? `Save ${item.path} as a .tar.gz archive` : `Save ${item.path}`,
-          defaultPath: localNameFor(item),
+        if (items.length === 1) {
+          const [item] = items;
+          const result = await showSaveDialog(event, {
+            title: item.isDirectory ? `Save ${item.path} as a .tar.gz archive` : `Save ${item.path}`,
+            defaultPath: localNameFor(item),
+          });
+          if (result.canceled || !result.filePath) {
+            return { saved: [] };
+          }
+          await download(item, result.filePath);
+          return { saved: [result.filePath] };
+        }
+
+        const result = await showOpenDialog(event, {
+          title: `Save ${items.length} items to a folder`,
+          properties: ["openDirectory", "createDirectory"],
         });
-        if (result.canceled || !result.filePath) {
+        if (result.canceled || result.filePaths.length === 0) {
           return { saved: [] };
         }
-        await download(item, result.filePath);
-        return { saved: [result.filePath] };
-      }
-
-      const result = await showOpenDialog(event, {
-        title: `Save ${items.length} items to a folder`,
-        properties: ["openDirectory", "createDirectory"],
-      });
-      if (result.canceled || result.filePaths.length === 0) {
-        return { saved: [] };
-      }
-      const saved: string[] = [];
-      for (const item of items) {
-        const localPath = await uniqueLocalPath(result.filePaths[0], localNameFor(item));
-        await download(item, localPath);
-        saved.push(localPath);
-      }
-      return { saved };
-    });
+        const saved: string[] = [];
+        for (const item of items) {
+          const localPath = await uniqueLocalPath(result.filePaths[0], localNameFor(item));
+          await download(item, localPath);
+          saved.push(localPath);
+        }
+        return { saved };
+      },
+    );
   }
 }
