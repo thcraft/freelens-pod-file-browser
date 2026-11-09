@@ -148,7 +148,7 @@ cover the scripts themselves, not only their callers.
 
 **CI.** The workflows in `.github/workflows` type-check, test, build, lint and run Knip on every push and pull request.
 `release.yaml` runs on a `v*` tag: it checks that the tag matches `package.json`, builds and tests the extension,
-publishes it to npm with trusted publishing (no npm token in the repository; versions with a suffix go to the `next`
+stages it on npm with trusted publishing (no npm token in the repository; versions with a suffix go to the `next`
 dist-tag, others to `latest`), and creates the GitHub release (0.x and versions with a suffix as pre-releases) with
 the tarball, its `.tgz.sha256` and the notes from `CHANGELOG.md`. Running it by hand builds the tarball as an artifact
 without releasing anything.
@@ -156,9 +156,12 @@ without releasing anything.
 To release, add a `## <version> (<date>)` section to `CHANGELOG.md`, set the version in `package.json`, commit, and tag:
 
 ```sh
-git tag -a v0.4.0 -m "Pod File Browser 0.4.0"
-git push origin main v0.4.0
+git tag -a v0.4.1 -m "Pod File Browser 0.4.1"
+git push origin main v0.4.1
 ```
+
+The workflow only stages the version on npm. It becomes public once a maintainer approves it on npmjs.com
+(**Staged Packages**, with 2FA), or with `npm stage approve <stage-id>`.
 
 Push one tag at a time: GitHub starts no workflow for a push of more than three tags.
 

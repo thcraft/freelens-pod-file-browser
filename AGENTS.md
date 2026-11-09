@@ -747,15 +747,15 @@ problem does not show.
 
 ### Workflows
 
-| Workflow               | Runs                                                                                          |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `type-check.yaml`      | `pnpm type:check`                                                                             |
-| `check.yaml`           | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                                            |
-| `unit-tests.yaml`      | `pnpm test:unit`                                                                              |
-| `trunk-check.yaml`     | `trunk check --all`                                                                           |
-| `mise-lock-check.yaml` | on a change to `mise.lock`: no checksum changed for an unchanged tool version                 |
-| `cleanup-cache.yaml`   | on a closed pull request: deletes the caches of its merge ref                                 |
-| `release.yaml`         | on a `v*` tag: type check, tests, build, pack with `.tgz.sha256`, npm publish, GitHub release |
+| Workflow               | Runs                                                                                                |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `type-check.yaml`      | `pnpm type:check`                                                                                   |
+| `check.yaml`           | `pnpm build`, `pnpm lint:check`, `pnpm knip:check`                                                  |
+| `unit-tests.yaml`      | `pnpm test:unit`                                                                                    |
+| `trunk-check.yaml`     | `trunk check --all`                                                                                 |
+| `mise-lock-check.yaml` | on a change to `mise.lock`: no checksum changed for an unchanged tool version                       |
+| `cleanup-cache.yaml`   | on a closed pull request: deletes the caches of its merge ref                                       |
+| `release.yaml`         | on a `v*` tag: type check, tests, build, pack with `.tgz.sha256`, npm stage publish, GitHub release |
 
 The type check has a workflow of its own, as in Freelens, so that a type error
 shows as its own failed check rather than as a failed build. `check.yaml`
@@ -764,13 +764,16 @@ builds without the type check for the same reason, so it does not run twice.
 `release.yaml` fails when the tag does not match `version` in `package.json`.
 It packs `thcraft-freelens-pod-file-browser-<version>.tgz` and writes its
 `sha256sum` line into `<tarball>.sha256`: Freelens checks a tarball installed
-from a URL against that file next to it. It publishes the tarball to npm with
-trusted publishing: the job has `id-token: write`, npm exchanges the OIDC token
-for a publish token, and the repository keeps no npm token. The package on
-npmjs.com names this repository and `release.yaml` as its trusted publisher;
-renaming either breaks publishing until the setting is changed there. A
-version with a suffix goes to the `next` dist-tag, any other to `latest`,
-which Freelens installs by name. A version that is on npm already is skipped,
+from a URL against that file next to it. It stages the package on npm with
+`npm stage publish` and trusted publishing: the job has `id-token: write`, npm
+exchanges the OIDC token for a short-lived token, and the repository keeps no
+npm token. The trusted publisher on npmjs.com (this repository and
+`release.yaml`; renaming either breaks it) allows staging only, so the version
+stays private until a maintainer approves it under Staged Packages on
+npmjs.com, with 2FA; a plain `npm publish` from the workflow fails with
+ENEEDAUTH. The dist-tag is fixed when the version is staged: a version with a
+suffix goes to `next`, any other to `latest`, which Freelens installs by name.
+A version that is on npm already is skipped,
 so the first version, published by hand to create the package, still gets its
 GitHub release. The release notes are the section of the version in
 `CHANGELOG.md`; 0.x versions and versions with a suffix are GitHub
@@ -779,7 +782,8 @@ releases nothing. Push one tag at a time: GitHub starts no workflow for a push
 of more than three tags.
 
 To release: add a `## <version> (<date>)` section to `CHANGELOG.md`, set the
-same version in `package.json`, commit, tag `v<version>` and push the tag.
+same version in `package.json`, commit, tag `v<version>` and push the tag, then
+approve the staged version on npmjs.com.
 
 ## Checking the Extension in Freelens
 
